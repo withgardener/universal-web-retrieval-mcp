@@ -1,0 +1,13 @@
+# Hermes Agent (~/.hermes/config.yaml) — universal-web-retrieval 接入示例
+# Hermes 仅作为 consumer：不改任何 Hermes 源码，env 由 Hermes 传给 stdio 子进程。
+mcp_servers:
+  universal-web-retrieval:
+    command: /root/.hermes_feishu_card/runtime/hermes-agent-v21.2/venv/bin/python
+    args: ["-m", "universal_web_retrieval"]
+    transport: stdio
+    enabled: true
+    env:
+      PYTHONPATH: /root/.hermes/mcp-servers/universal-web-retrieval/src
+      # 两个 key 都可选；缺哪个哪个走官方 keyless
+      ANYSEARCH_API_KEY: as_sk_xxx        # 可选
+      TAVILY_API_KEY: tvly-dev-xxx        # 可选

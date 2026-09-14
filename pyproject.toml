@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "universal-web-retrieval-mcp"
+version = "0.1.0"
+description = "A universal MCP server providing resilient web search and content retrieval through automatic provider failover across AnySearch, Tavily, and DDGS."
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{name = "withgardener"}]
+dependencies = [
+    "mcp>=2.0",
+    "httpx>=0.27",
+    "ddgs>=9.0",
+]
+
+[project.scripts]
+universal-web-retrieval = "universal_web_retrieval.server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
