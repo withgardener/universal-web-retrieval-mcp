@@ -1,8 +1,13 @@
-"""Provider router: capability -> ordered provider chain with error classification."""
+"""Provider router: capability -> ordered provider chain with error classification.
+
+``deadline`` is an explicit absolute monotonic timestamp (or None). Batch callers
+pass ONE shared deadline across all URLs so the overall batch is bounded; single
+calls get a fresh deadline per call.
+"""
 from __future__ import annotations
 
 import time
-from typing import Dict, List
+from typing import Any, Dict, List, Optional
 
 from .. import config
 from ..errors import Capability, InvalidInputError, Provider, ProviderError, SearchResult, FetchResult
@@ -25,21 +30,22 @@ class ProviderRouter:
     def chain(self, capability: Capability) -> List[Provider]:
         return list(self._providers[capability])
 
-    def search(self, query: str, limit: int) -> SearchResult:
+    def search(self, query: str, limit: int, *, deadline: Optional[float] = None) -> SearchResult:
         if not query or not query.strip():
             raise InvalidInputError("query must be a non-empty string")
-        return self._walk(Capability.SEARCH, query=query, limit=limit)
+        return self._walk(Capability.SEARCH, query=query, limit=limit, deadline=deadline)
 
-    def fetch(self, url: str) -> FetchResult:
+    def fetch(self, url: str, *, deadline: Optional[float] = None) -> FetchResult:
         url = (url or "").strip()
         if not url:
             raise InvalidInputError("url must be a non-empty string")
         if not url.lower().startswith(("http://", "https://")):
             raise InvalidInputError(f"unsupported URL scheme: {url[:50]}")
-        return self._walk(Capability.FETCH, url=url)
+        return self._walk(Capability.FETCH, url=url, deadline=deadline)
 
-    def _walk(self, capability: Capability, **kwargs):
-        deadline = time.monotonic() + config.chain_deadline()
+    def _walk(self, capability: Capability, *, deadline: Optional[float], **kwargs) -> Any:
+        if deadline is None:
+            deadline = time.monotonic() + config.chain_deadline()
         errors: List[str] = []
         for provider in self.chain(capability):
             remaining = deadline - time.monotonic()

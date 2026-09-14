@@ -25,35 +25,51 @@ class DDGSProvider(Provider):
         from ddgs import DDGS
         timeout = config.ddgs_timeout()
         if timeout_override is not None:
-            timeout = min(timeout, max(timeout_override, 1.0))
+            timeout = min(timeout, timeout_override) if timeout_override >= 1.0 else min(timeout, timeout_override)
         return DDGS(timeout=timeout)
 
     def search(self, query: str, limit: int, timeout_override: float | None = None) -> SearchResult:
         def _call() -> SearchResult:
-            rows = []
-            with self._client(timeout_override) as client:
-                for i, hit in enumerate(client.text(query, max_results=limit)):
-                    if i >= limit:
-                        break
-                    rows.append({"title": str(hit.get("title", "")),
-                                 "url": str(hit.get("href") or hit.get("url") or ""),
-                                 "snippet": str(hit.get("body", ""))})
-            if not rows:
-                raise ProviderError("no results")
-            return SearchResult(results=rows, provider=self.NAME, mode=self.mode())
+            try:
+                return self._search_impl(query, limit, timeout_override)
+            except ProviderError:
+                raise
+            except Exception as exc:  # noqa: BLE001 — normalize package errors
+                raise ProviderError(f"ddgs error: {exc}") from exc
         result, elapsed = self._timed(_call)
         result.latency_ms = elapsed
         return result
 
+    def _search_impl(self, query: str, limit: int, timeout_override: float | None) -> SearchResult:
+        rows = []
+        with self._client(timeout_override) as client:
+            for i, hit in enumerate(client.text(query, max_results=limit)):
+                if i >= limit:
+                    break
+                rows.append({"title": str(hit.get("title", "")),
+                             "url": str(hit.get("href") or hit.get("url") or ""),
+                             "snippet": str(hit.get("body", ""))})
+        if not rows:
+            raise ProviderError("no results")
+        return SearchResult(results=rows, provider=self.NAME, mode=self.mode())
+
     def fetch(self, url: str, timeout_override: float | None = None) -> FetchResult:
         def _call() -> FetchResult:
-            with self._client(timeout_override) as client:
-                resp = client.extract(url, fmt="text_markdown")
-            content = str(resp.get("content", ""))[:config.extract_char_limit()]
-            if not content:
-                raise ProviderError("empty content")
-            return FetchResult(url=url, content=content, provider=self.NAME, mode=self.mode(),
-                               content_type="text_markdown")
+            try:
+                return self._fetch_impl(url, timeout_override)
+            except ProviderError:
+                raise
+            except Exception as exc:  # noqa: BLE001 — normalize package errors
+                raise ProviderError(f"ddgs error: {exc}") from exc
         result, elapsed = self._timed(_call)
         result.latency_ms = elapsed
         return result
+
+    def _fetch_impl(self, url: str, timeout_override: float | None) -> FetchResult:
+        with self._client(timeout_override) as client:
+            resp = client.extract(url, fmt="text_markdown")
+        content = str(resp.get("content", ""))[:config.extract_char_limit()]
+        if not content:
+            raise ProviderError("empty content")
+        return FetchResult(url=url, content=content, provider=self.NAME, mode=self.mode(),
+                           content_type="text_markdown")

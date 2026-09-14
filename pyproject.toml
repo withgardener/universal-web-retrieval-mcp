@@ -3,8 +3,11 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "universal-web-retrieval-mcp"
+name = "uwr"
 version = "0.1.0"
+# PyPI distribution name: `uwr` (target: `uvx uwr` / `pip install uwr`).
+# GitHub repo remains withgardener/universal-web-retrieval-mcp; import module
+# stays universal_web_retrieval; MCP server name stays universal-web-retrieval.
 description = "A universal MCP server providing resilient web search and content retrieval through automatic provider failover across AnySearch, Tavily, and DDGS."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -17,6 +20,7 @@ dependencies = [
 ]
 
 [project.scripts]
+uwr = "universal_web_retrieval.cli:main"
 universal-web-retrieval = "universal_web_retrieval.server:main"
 
 [tool.setuptools.packages.find]

@@ -28,10 +28,13 @@ class AnySearchProvider(Provider):
         return (configured[0], min(configured[1], max(override, 1.0)))
 
     def _timeout(self, override: float | None):
+        """(connect, read) both bounded by the remaining chain budget — no link
+        may outlive the deadline through its connect phase."""
         configured = config.anysearch_timeout()
         if override is None:
             return configured
-        return (configured[0], min(configured[1], max(override, 1.0)))
+        bounded = min(override, 1.0) if override < 1.0 else override
+        return (min(configured[0], bounded), min(configured[1], bounded))
 
     def _headers(self) -> dict:
         # Keyless = NO Authorization header at all (official rule: "remove the
@@ -53,6 +56,8 @@ class AnySearchProvider(Provider):
             rows = [{"title": str(x.get("title", "")), "url": str(x.get("url", "")),
                      "snippet": str(x.get("snippet") or x.get("content") or "")}
                     for x in data.get("data", {}).get("results", [])]
+            if not rows:
+                raise ProviderError("no results")
             return SearchResult(results=rows, provider=self.NAME, mode=self.mode())
         result, elapsed = self._timed(_call)
         result.latency_ms = elapsed

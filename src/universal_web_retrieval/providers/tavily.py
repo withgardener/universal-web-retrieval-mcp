@@ -22,16 +22,22 @@ class TavilyProvider(Provider):
         return config.tavily_api_key()
 
     def _timeout(self, override: float | None):
+        """(connect, read) both bounded by the remaining chain budget — no link
+        may outlive the deadline through its connect phase."""
         configured = config.tavily_timeout()
         if override is None:
             return configured
-        return (configured[0], min(configured[1], max(override, 1.0)))
+        bounded = min(override, 1.0) if override < 1.0 else override
+        return (min(configured[0], bounded), min(configured[1], bounded))
 
     def _timeout(self, override: float | None):
+        """(connect, read) both bounded by the remaining chain budget — no link
+        may outlive the deadline through its connect phase."""
         configured = config.tavily_timeout()
         if override is None:
             return configured
-        return (configured[0], min(configured[1], max(override, 1.0)))
+        bounded = min(override, 1.0) if override < 1.0 else override
+        return (min(configured[0], bounded), min(configured[1], bounded))
 
     def _headers(self) -> dict:
         if self.api_key():
@@ -50,6 +56,8 @@ class TavilyProvider(Provider):
             rows = [{"title": str(x.get("title", "")), "url": str(x.get("url", "")),
                      "snippet": str(x.get("content", ""))}
                     for x in r.json().get("results", [])]
+            if not rows:
+                raise ProviderError("no results")
             return SearchResult(results=rows, provider=self.NAME, mode=self.mode())
         result, elapsed = self._timed(_call)
         result.latency_ms = elapsed

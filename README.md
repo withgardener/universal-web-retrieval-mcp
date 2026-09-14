@@ -40,9 +40,17 @@ src/universal_web_retrieval/
 ## Installation
 
 ```bash
-pip install mcp httpx ddgs
-# run:
+# from PyPI (planned distribution name):
+pip install uwr
+# or from source:
+pip install git+https://github.com/withgardener/universal-web-retrieval-mcp.git
+
+# run (stdio MCP):
+uwr
+# or:
 PYTHONPATH=src python -m universal_web_retrieval
+# version:
+uwr --version
 ```
 
 `ddgs` is a **runtime dependency** (the fixed final fallback of both chains), not an optional extra. Dependencies are pinned to compatible ranges (`mcp>=2,<3`, `httpx>=0.27,<1`, `ddgs>=9.16,<10`) so a major-version breaking change never ships to a running server via a routine `pip update`.
@@ -56,6 +64,10 @@ PYTHONPATH=src python -m universal_web_retrieval
 | `WEB_RETRIEVAL_TIMEOUT` | no | Overall chain deadline in seconds (default 45) |
 | `WEB_RETRIEVAL_LOG_LEVEL` | no | `WARNING` default; logs go to **stderr** (stdout is MCP JSON-RPC) |
 | `WEB_RETRIEVAL_MAX_RESULTS` | no | Cap for `web_search.limit` (default 20) |
+| `WEB_RETRIEVAL_EXTRACT_CHAR_LIMIT` | no | Max fetched-content chars (default 15000) |
+| `WEB_RETRIEVAL_ANYSEARCH_CONNECT_TIMEOUT` / `_TIMEOUT` | no | AnySearch connect/read timeouts (5s / 20s) |
+| `WEB_RETRIEVAL_TAVILY_CONNECT_TIMEOUT` / `_TIMEOUT` | no | Tavily connect/read timeouts (5s / 20s) |
+| `WEB_RETRIEVAL_DDGS_TIMEOUT` | no | DDGS overall timeout (15s) |
 
 ## Tools
 
@@ -90,6 +102,12 @@ Accepts a single `url` string or a `urls` array (max 5). Returns a JSON array:
 ```
 
 Failed URLs carry an `error` field instead of `content`. Content is Markdown/clean text — never raw HTML. JS-rendered, login-walled, or CAPTCHA-protected pages are not guaranteed (plain HTTP retrieval only; no browser automation).
+
+### Network scope & SSRF note
+
+`web_fetch` retrieves any URL the **host environment** can reach — this deliberately includes private-network and `localhost` targets, which is a legitimate capability for a local agent tool. Redirects may land on private or link-local destinations. When deploying against **untrusted agent input**, apply network-level isolation (container/netns/firewall) as appropriate for your threat model. A future `WEB_RETRIEVAL_BLOCK_PRIVATE=1` opt-in may add in-process filtering; v0.1.0 intentionally does not restrict private fetches.
+
+Batch behavior: `urls` is capped at **5 per call** (larger batches are rejected with an explicit error, not silently truncated), duplicates are de-duplicated preserving first-seen order, and the **whole batch shares one deadline** — URLs whose turn arrives after the deadline return a timeout error without any network attempt. Error text containing URLs has credential-looking query parameters (`token=`, `api_key=`, ...) redacted.
 
 ## Routing & fallback
 
