@@ -1,0 +1,72 @@
+name: Release to PyPI
+
+# Publishes ONLY when a GitHub Release is published (e.g. v0.1.0).
+# Plain pushes, tags, and PRs never reach PyPI.
+# Auth: PyPA Trusted Publishing (OIDC) — no PyPI token/username/password anywhere.
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    name: Build & test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade build pip
+
+      - name: Install runtime deps (for unit tests)
+        run: python -m pip install mcp httpx ddgs pytest
+
+      - name: Run unit tests
+        run: python -m pytest tests/unit -v
+
+      - name: Build sdist + wheel
+        run: python -m build
+
+      - name: Verify dist artifacts
+        run: |
+          ls -la dist/
+          test -f dist/uwr-0.1.0-py3-none-any.whl
+          test -f dist/uwr-0.1.0.tar.gz
+
+      - name: Smoke — clean install & CLI version
+        run: |
+          python -m venv /tmp/uwr-verify
+          /tmp/uwr-verify/bin/pip install dist/uwr-0.1.0-py3-none-any.whl
+          /tmp/uwr-verify/bin/uwr --version
+
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Publish to PyPI (Trusted Publishing)
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # OIDC only — the sole permission for this job
+    environment: pypi
+    steps:
+      - name: Download dist artifact (same artifacts build produced)
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
