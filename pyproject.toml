@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "uwr"
-version = "0.1.0"
+version = "0.1.1"
 # PyPI distribution name: `uwr` (target: `uvx uwr` / `pip install uwr`).
 # GitHub repo remains withgardener/universal-web-retrieval-mcp; import module
 # stays universal_web_retrieval; MCP server name stays universal-web-retrieval.
