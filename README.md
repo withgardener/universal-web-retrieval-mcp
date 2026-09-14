@@ -45,7 +45,7 @@ pip install mcp httpx ddgs
 PYTHONPATH=src python -m universal_web_retrieval
 ```
 
-`ddgs` is a **runtime dependency** (the fixed final fallback of both chains), not an optional extra.
+`ddgs` is a **runtime dependency** (the fixed final fallback of both chains), not an optional extra. Dependencies are pinned to compatible ranges (`mcp>=2,<3`, `httpx>=0.27,<1`, `ddgs>=9.16,<10`) so a major-version breaking change never ships to a running server via a routine `pip update`.
 
 ## Configuration
 
@@ -152,8 +152,13 @@ claude mcp add universal-web-retrieval \
 
 ```bash
 pip install pytest
-pytest tests/unit -v
+pytest tests/unit -v            # router/auth/deadline unit tests (no network)
+
+# Live provider smoke tests (hit real APIs; opt-in):
+RUN_LIVE_TESTS=1 pytest tests/integration -v
 ```
+
+Live tests cover all three providers in both keyless and keyed modes; keyed tests SKIP (not fail) when the corresponding key is not configured.
 
 ## Testing
 

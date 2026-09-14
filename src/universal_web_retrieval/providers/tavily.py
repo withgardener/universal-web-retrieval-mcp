@@ -13,7 +13,6 @@ import httpx
 
 from .. import config
 from ..errors import AuthMode, FetchResult, Provider, ProviderError, SearchResult, classify_http_error
-from ..errors import AuthMode, FetchResult, Provider, ProviderError, SearchResult, classify_http_error
 
 
 class TavilyProvider(Provider):
@@ -21,6 +20,12 @@ class TavilyProvider(Provider):
 
     def api_key(self) -> str:
         return config.tavily_api_key()
+
+    def _timeout(self, override: float | None):
+        configured = config.tavily_timeout()
+        if override is None:
+            return configured
+        return (configured[0], min(configured[1], max(override, 1.0)))
 
     def _headers(self) -> dict:
         if self.api_key():
@@ -35,7 +40,7 @@ class TavilyProvider(Provider):
                                  "include_raw_content": False, "include_images": False},
                            timeout=config.tavily_timeout(), headers=self._headers())
             if r.status_code >= 400:
-                raise classify_http_error(r.status_code, r.text)
+                raise classify_http_error(r.status_code, r.text, authenticated=(self.mode() == AuthMode.KEYED))
             rows = [{"title": str(x.get("title", "")), "url": str(x.get("url", "")),
                      "snippet": str(x.get("content", ""))}
                     for x in r.json().get("results", [])]
@@ -50,7 +55,7 @@ class TavilyProvider(Provider):
                            json={"urls": [url], "include_images": False},
                            timeout=config.tavily_timeout(), headers=self._headers())
             if r.status_code >= 400:
-                raise classify_http_error(r.status_code, r.text)
+                raise classify_http_error(r.status_code, r.text, authenticated=(self.mode() == AuthMode.KEYED))
             resp = r.json()
             results = resp.get("results", [])
             if not results:

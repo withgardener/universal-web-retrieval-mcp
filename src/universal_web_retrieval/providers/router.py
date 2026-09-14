@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import time
-from typing import Dict, List, Type
+from typing import Dict, List
 
 from .. import config
 from ..errors import Capability, InvalidInputError, Provider, ProviderError, SearchResult, FetchResult
@@ -41,18 +41,21 @@ class ProviderRouter:
     def _walk(self, capability: Capability, **kwargs):
         deadline = time.monotonic() + config.chain_deadline()
         errors: List[str] = []
-        last_error: Optional[ProviderError] = None
         for provider in self.chain(capability):
-            if time.monotonic() > deadline:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
                 errors.append(f"chain deadline ({config.chain_deadline():.0f}s) reached before {provider.NAME}")
                 break
+            # Hard upper bound: each attempt gets min(provider timeout, remaining),
+            # so one slow provider can never push the walk past the deadline.
+            kwargs["timeout_override"] = remaining
             try:
                 if capability == Capability.SEARCH:
-                    return provider.search(kwargs["query"], kwargs["limit"])
-                return provider.fetch(kwargs["url"])
+                    return provider.search(kwargs["query"], kwargs["limit"],
+                                           timeout_override=remaining)
+                return provider.fetch(kwargs["url"], timeout_override=remaining)
             except ProviderError as exc:
                 errors.append(f"{provider.NAME}({provider.mode().value}): {str(exc)[:150]}")
-                last_error = exc
                 if exc.auth_failure:
                     # Loud, non-suppressible: the user's key is misconfigured.
                     import logging

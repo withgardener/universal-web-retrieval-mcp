@@ -12,7 +12,6 @@ import httpx
 
 from .. import config
 from ..errors import AuthMode, FetchResult, Provider, ProviderError, SearchResult, classify_http_error
-from ..errors import AuthMode, FetchResult, Provider, ProviderError, SearchResult, classify_http_error
 
 
 class AnySearchProvider(Provider):
@@ -20,6 +19,13 @@ class AnySearchProvider(Provider):
 
     def api_key(self) -> str:
         return config.anysearch_api_key()
+
+    def _timeout(self, override: float | None):
+        configured = config.anysearch_timeout()
+        if override is None:
+            return configured
+        # (connect, read): cap read by the remaining chain time, keep connect small.
+        return (configured[0], min(configured[1], max(override, 1.0)))
 
     def _headers(self) -> dict:
         # Keyless = NO Authorization header at all (official rule: "remove the
@@ -34,7 +40,7 @@ class AnySearchProvider(Provider):
                            json={"query": query, "max_results": min(limit, 10)},
                            timeout=config.anysearch_timeout(), headers=self._headers())
             if r.status_code >= 400:
-                raise classify_http_error(r.status_code, r.text)
+                raise classify_http_error(r.status_code, r.text, authenticated=(self.mode() == AuthMode.KEYED))
             data = r.json()
             if data.get("code") != 0:
                 raise ProviderError(f"API code {data.get('code')}: {data.get('message','')}")
@@ -51,7 +57,7 @@ class AnySearchProvider(Provider):
             r = httpx.post("https://api.anysearch.com/v1/extract",
                            json={"url": url}, timeout=config.anysearch_timeout(), headers=self._headers())
             if r.status_code >= 400:
-                raise classify_http_error(r.status_code, r.text)
+                raise classify_http_error(r.status_code, r.text, authenticated=(self.mode() == AuthMode.KEYED))
             data = r.json()
             if data.get("code") != 0:
                 raise ProviderError(f"API code {data.get('code')}: {data.get('message','')}")

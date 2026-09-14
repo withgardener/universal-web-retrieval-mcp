@@ -21,14 +21,17 @@ class DDGSProvider(Provider):
     def api_key(self) -> str:
         return ""  # no key concept; always keyless
 
-    def _client(self):
+    def _client(self, timeout_override: float | None = None):
         from ddgs import DDGS
-        return DDGS(timeout=config.ddgs_timeout())
+        timeout = config.ddgs_timeout()
+        if timeout_override is not None:
+            timeout = min(timeout, max(timeout_override, 1.0))
+        return DDGS(timeout=timeout)
 
-    def search(self, query: str, limit: int) -> SearchResult:
+    def search(self, query: str, limit: int, timeout_override: float | None = None) -> SearchResult:
         def _call() -> SearchResult:
             rows = []
-            with self._client() as client:
+            with self._client(timeout_override) as client:
                 for i, hit in enumerate(client.text(query, max_results=limit)):
                     if i >= limit:
                         break
@@ -42,9 +45,9 @@ class DDGSProvider(Provider):
         result.latency_ms = elapsed
         return result
 
-    def fetch(self, url: str) -> FetchResult:
+    def fetch(self, url: str, timeout_override: float | None = None) -> FetchResult:
         def _call() -> FetchResult:
-            with self._client() as client:
+            with self._client(timeout_override) as client:
                 resp = client.extract(url, fmt="text_markdown")
             content = str(resp.get("content", ""))[:config.extract_char_limit()]
             if not content:

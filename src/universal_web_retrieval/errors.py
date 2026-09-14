@@ -32,13 +32,17 @@ class InvalidInputError(Exception):
     """MCP input is malformed — never eligible for provider fallback."""
 
 
-def classify_http_error(status: int, body: str) -> ProviderError:
-    """Map an HTTP status + body to a classified ProviderError."""
+def classify_http_error(status: int, body: str, *, authenticated: bool) -> ProviderError:
+    """Map an HTTP status + body to a classified ProviderError.
+
+    ``authenticated`` reflects the request's actual auth mode: 401/403 on a KEYED
+    request is a credentials problem (auth_failure=True, loud ERROR log); the same
+    status on a KEYLESS request is an access/provider failure — NOT an auth
+    failure, and must not tell the user to "check the configured API key"."""
     text = (body or "")[:300]
-    if status == 401 or status == 403:
-        # 403 from an auth'd request = credentials problem; a keyless request
-        # getting 403 is provider-side blocking — still not worth retrying here.
-        return ProviderError(f"HTTP {status}: {text}", fallback_eligible=True, auth_failure=True)
+    if status in (401, 403):
+        return ProviderError(f"HTTP {status}: {text}", fallback_eligible=True,
+                             auth_failure=authenticated)
     if status == 429:
         return ProviderError(f"HTTP 429 rate limited: {text}")
     if 500 <= status < 600:
@@ -95,12 +99,14 @@ class Provider(ABC):
         """Return the configured API key, or '' when absent (=> keyless)."""
 
     @abstractmethod
-    def search(self, query: str, limit: int) -> SearchResult:
-        """Web search. Raises ProviderError on failure."""
+    def search(self, query: str, limit: int, timeout_override: float | None = None) -> SearchResult:
+        """Web search. Raises ProviderError on failure. ``timeout_override`` caps
+        this attempt's total time (chain deadline remainder)."""
 
     @abstractmethod
-    def fetch(self, url: str) -> FetchResult:
-        """Fetch one URL's content. Raises ProviderError on failure."""
+    def fetch(self, url: str, timeout_override: float | None = None) -> FetchResult:
+        """Fetch one URL's content. Raises ProviderError on failure. ``timeout_override``
+        caps this attempt's total time (chain deadline remainder)."""
 
     def _timed(self, fn, *args, **kwargs):
         start = time.monotonic()
