@@ -27,18 +27,24 @@ class TavilyProvider(Provider):
             return configured
         return (configured[0], min(configured[1], max(override, 1.0)))
 
+    def _timeout(self, override: float | None):
+        configured = config.tavily_timeout()
+        if override is None:
+            return configured
+        return (configured[0], min(configured[1], max(override, 1.0)))
+
     def _headers(self) -> dict:
         if self.api_key():
             return {"Authorization": f"Bearer {self.api_key()}"}
         # Official keyless access header.
         return {"X-Tavily-Access-Mode": "keyless"}
 
-    def search(self, query: str, limit: int) -> SearchResult:
+    def search(self, query: str, limit: int, timeout_override: float | None = None) -> SearchResult:
         def _call() -> SearchResult:
             r = httpx.post("https://api.tavily.com/search",
                            json={"query": query, "max_results": min(limit, 20),
                                  "include_raw_content": False, "include_images": False},
-                           timeout=config.tavily_timeout(), headers=self._headers())
+                           timeout=self._timeout(timeout_override), headers=self._headers())
             if r.status_code >= 400:
                 raise classify_http_error(r.status_code, r.text, authenticated=(self.mode() == AuthMode.KEYED))
             rows = [{"title": str(x.get("title", "")), "url": str(x.get("url", "")),
@@ -49,11 +55,11 @@ class TavilyProvider(Provider):
         result.latency_ms = elapsed
         return result
 
-    def fetch(self, url: str) -> FetchResult:
+    def fetch(self, url: str, timeout_override: float | None = None) -> FetchResult:
         def _call() -> FetchResult:
             r = httpx.post("https://api.tavily.com/extract",
                            json={"urls": [url], "include_images": False},
-                           timeout=config.tavily_timeout(), headers=self._headers())
+                           timeout=self._timeout(timeout_override), headers=self._headers())
             if r.status_code >= 400:
                 raise classify_http_error(r.status_code, r.text, authenticated=(self.mode() == AuthMode.KEYED))
             resp = r.json()

@@ -27,6 +27,12 @@ class AnySearchProvider(Provider):
         # (connect, read): cap read by the remaining chain time, keep connect small.
         return (configured[0], min(configured[1], max(override, 1.0)))
 
+    def _timeout(self, override: float | None):
+        configured = config.anysearch_timeout()
+        if override is None:
+            return configured
+        return (configured[0], min(configured[1], max(override, 1.0)))
+
     def _headers(self) -> dict:
         # Keyless = NO Authorization header at all (official rule: "remove the
         # Authorization entry"). Never send empty/Bearer-null values.
@@ -34,11 +40,11 @@ class AnySearchProvider(Provider):
             return {"Authorization": f"Bearer {self.api_key()}"}
         return {}
 
-    def search(self, query: str, limit: int) -> SearchResult:
+    def search(self, query: str, limit: int, timeout_override: float | None = None) -> SearchResult:
         def _call() -> SearchResult:
             r = httpx.post("https://api.anysearch.com/v1/search",
                            json={"query": query, "max_results": min(limit, 10)},
-                           timeout=config.anysearch_timeout(), headers=self._headers())
+                           timeout=self._timeout(timeout_override), headers=self._headers())
             if r.status_code >= 400:
                 raise classify_http_error(r.status_code, r.text, authenticated=(self.mode() == AuthMode.KEYED))
             data = r.json()
@@ -52,10 +58,10 @@ class AnySearchProvider(Provider):
         result.latency_ms = elapsed
         return result
 
-    def fetch(self, url: str) -> FetchResult:
+    def fetch(self, url: str, timeout_override: float | None = None) -> FetchResult:
         def _call() -> FetchResult:
             r = httpx.post("https://api.anysearch.com/v1/extract",
-                           json={"url": url}, timeout=config.anysearch_timeout(), headers=self._headers())
+                           json={"url": url}, timeout=self._timeout(timeout_override), headers=self._headers())
             if r.status_code >= 400:
                 raise classify_http_error(r.status_code, r.text, authenticated=(self.mode() == AuthMode.KEYED))
             data = r.json()
