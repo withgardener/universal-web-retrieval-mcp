@@ -27,7 +27,9 @@ jobs:
         run: python -m pip install --upgrade build pip
 
       - name: Install runtime deps (for unit tests)
-        run: python -m pip install mcp httpx ddgs pytest
+        run: |
+          python -m pip install --upgrade pip pytest
+          python -m pip install -e .
 
       - name: Run unit tests
         run: python -m pytest tests/unit -v
@@ -38,13 +40,15 @@ jobs:
       - name: Verify dist artifacts
         run: |
           ls -la dist/
-          test -f dist/uwr-0.1.0-py3-none-any.whl
-          test -f dist/uwr-0.1.0.tar.gz
+          VER=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
+          test -f "dist/uwr-${VER}-py3-none-any.whl"
+          test -f "dist/uwr-${VER}.tar.gz"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
 
       - name: Smoke — clean install & CLI version
         run: |
           python -m venv /tmp/uwr-verify
-          /tmp/uwr-verify/bin/pip install dist/uwr-0.1.0-py3-none-any.whl
+          /tmp/uwr-verify/bin/pip install dist/uwr-*-py3-none-any.whl
           /tmp/uwr-verify/bin/uwr --version
 
       - name: Upload dist artifact

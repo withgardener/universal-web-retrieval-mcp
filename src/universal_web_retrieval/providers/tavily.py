@@ -30,15 +30,6 @@ class TavilyProvider(Provider):
         bounded = min(override, 1.0) if override < 1.0 else override
         return (min(configured[0], bounded), min(configured[1], bounded))
 
-    def _timeout(self, override: float | None):
-        """(connect, read) both bounded by the remaining chain budget — no link
-        may outlive the deadline through its connect phase."""
-        configured = config.tavily_timeout()
-        if override is None:
-            return configured
-        bounded = min(override, 1.0) if override < 1.0 else override
-        return (min(configured[0], bounded), min(configured[1], bounded))
-
     def _headers(self) -> dict:
         if self.api_key():
             return {"Authorization": f"Bearer {self.api_key()}"}

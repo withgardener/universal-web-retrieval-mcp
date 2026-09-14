@@ -21,13 +21,6 @@ class AnySearchProvider(Provider):
         return config.anysearch_api_key()
 
     def _timeout(self, override: float | None):
-        configured = config.anysearch_timeout()
-        if override is None:
-            return configured
-        # (connect, read): cap read by the remaining chain time, keep connect small.
-        return (configured[0], min(configured[1], max(override, 1.0)))
-
-    def _timeout(self, override: float | None):
         """(connect, read) both bounded by the remaining chain budget — no link
         may outlive the deadline through its connect phase."""
         configured = config.anysearch_timeout()
