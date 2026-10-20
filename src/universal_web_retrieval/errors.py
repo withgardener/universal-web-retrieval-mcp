@@ -26,6 +26,8 @@ class ProviderError(Exception):
         super().__init__(message)
         self.fallback_eligible = fallback_eligible
         self.auth_failure = auth_failure
+        # Chain-level failures carry the per-provider outcome trail.
+        self.attempts: List[Dict[str, str]] = []
 
 
 class InvalidInputError(Exception):
@@ -38,13 +40,17 @@ def classify_http_error(status: int, body: str, *, authenticated: bool) -> Provi
     ``authenticated`` reflects the request's actual auth mode: 401/403 on a KEYED
     request is a credentials problem (auth_failure=True, loud ERROR log); the same
     status on a KEYLESS request is an access/provider failure — NOT an auth
-    failure, and must not tell the user to "check the configured API key"."""
+    failure, and must not tell the user to "check the configured API key".
+    """
     text = (body or "")[:300]
     if status in (401, 403):
         return ProviderError(f"HTTP {status}: {text}", fallback_eligible=True,
                              auth_failure=authenticated)
     if status == 429:
         return ProviderError(f"HTTP 429 rate limited: {text}")
+    if status == 402:
+        # Payment required (DeepSeek: insufficient balance). Never retried in-process.
+        return ProviderError(f"HTTP 402 insufficient balance / arrears: {text}")
     if 500 <= status < 600:
         return ProviderError(f"HTTP {status} upstream error: {text}")
     # Other 4xx: request-level problem, but could be provider-specific quirks —
@@ -61,13 +67,20 @@ class FetchResult:
     title: str = ""
     latency_ms: int = 0
     content_type: str = "text_markdown"
+    # Per-provider outcome trail, e.g. [{"provider": "bocha", "outcome": "skipped:not_configured"}]
+    attempts: List[Dict[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "url": self.url, "content": self.content, "title": self.title,
             "content_type": self.content_type, "provider": self.provider,
             "mode": self.mode.value, "latency_ms": self.latency_ms,
+            "attempts": list(self.attempts),
         }
+
+
+# Free-form extra fields a search hit may carry (passed through when non-empty).
+_SEARCH_EXTRA_FIELDS = ("published", "site", "score")
 
 
 @dataclass
@@ -76,23 +89,62 @@ class SearchResult:
     provider: str
     mode: AuthMode
     latency_ms: int = 0
+    attempts: List[Dict[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
+        rows = []
+        for r in self.results:
+            row = {"title": r.get("title", ""), "url": r.get("url", ""),
+                   "snippet": r.get("snippet", "")}
+            for key in _SEARCH_EXTRA_FIELDS:
+                if r.get(key) not in (None, ""):
+                    row[key] = r[key]
+            rows.append(row)
         return {
             "success": True, "provider": self.provider, "mode": self.mode.value,
-            "latency_ms": self.latency_ms,
-            "results": [{"title": r.get("title", ""), "url": r.get("url", ""),
-                         "snippet": r.get("snippet", "")} for r in self.results],
+            "latency_ms": self.latency_ms, "attempts": list(self.attempts),
+            "results": rows,
         }
 
 
 class Provider(ABC):
-    """One retrieval vendor. Auth mode is auto: key present -> keyed, absent -> keyless."""
+    """One retrieval vendor. Auth mode is auto: key present -> keyed, absent -> keyless.
+
+    Metadata drives the registry, the configurable chain and ``list_providers``:
+
+    ``CAPABILITIES``  which router chains may include this provider.
+    ``KEYED_ONLY``    True when the provider is useless without a key (Yuanbao,
+                      Bocha, DeepSeek). Such a link is skipped with
+                      ``skipped:not_configured`` instead of being attempted and
+                      401-ing the whole chain. AnySearch/Tavily/DDGS keep their
+                      official keyless behaviour and set this to False.
+    ``KIND``          informational: "search" / "fetch" / "answer".
+    """
 
     NAME: str = ""
+    CAPABILITIES: frozenset = frozenset({Capability.SEARCH, Capability.FETCH})
+    KEYED_ONLY: bool = False
+    KIND: str = "search"
 
     def mode(self) -> AuthMode:
         return AuthMode.KEYED if self.api_key() else AuthMode.KEYLESS
+
+    def supports(self, capability: Capability) -> bool:
+        return capability in self.CAPABILITIES
+
+    def is_configured(self) -> bool:
+        """True when this provider can run right now.
+
+        Keyless-capable providers are always configured; keyed-only providers
+        need a key. Used for the ``not_configured`` skip and by ``list_providers``.
+        """
+        return bool(self.api_key()) or not self.KEYED_ONLY
+
+    def not_configured(self) -> bool:
+        return not self.is_configured()
+
+    def auth_mode_name(self) -> str:
+        return self.mode().value
 
     @abstractmethod
     def api_key(self) -> str:

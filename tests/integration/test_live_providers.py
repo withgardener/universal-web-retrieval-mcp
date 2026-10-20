@@ -16,11 +16,17 @@ import sys
 sys.path.insert(0, sys_path)
 
 from universal_web_retrieval.providers.anysearch import AnySearchProvider
+from universal_web_retrieval.providers.bocha import BochaProvider
 from universal_web_retrieval.providers.ddgs import DDGSProvider
+from universal_web_retrieval.providers.deepseek import DeepSeekProvider
 from universal_web_retrieval.providers.tavily import TavilyProvider
+from universal_web_retrieval.providers.yuanbao import YuanbaoProvider
 
 ANYSEARCH_KEY = os.environ.get("ANYSEARCH_API_KEY", "").strip()
 TAVILY_KEY = os.environ.get("TAVILY_API_KEY", "").strip()
+YUANBAO_KEY = (os.environ.get("YUANBAO_API_KEY") or os.environ.get("WSA_API_KEY") or "").strip()
+BOCHA_KEY = os.environ.get("BOCHA_API_KEY", "").strip()
+DEEPSEEK_KEY = os.environ.get("DEEPSEEK_API_KEY", "").strip()
 
 
 def _assert_search_ok(res, provider_name):
@@ -94,3 +100,38 @@ class TestTavilyLive(unittest.TestCase):
         if not TAVILY_KEY:
             self.skipTest("TAVILY_API_KEY not configured")
         _assert_fetch_ok(TavilyProvider().fetch("https://example.com"), "tavily")
+
+
+class TestYuanbaoLive(unittest.TestCase):
+    def test_keyed_search(self):
+        if not YUANBAO_KEY:
+            self.skipTest("YUANBAO_API_KEY / WSA_API_KEY not configured")
+        p = YuanbaoProvider()
+        assert p.mode().value == "keyed"
+        _assert_search_ok(p.search("人工智能发展现状", 5), "yuanbao")
+
+    def test_session_reuse_second_search(self):
+        if not YUANBAO_KEY:
+            self.skipTest("YUANBAO_API_KEY / WSA_API_KEY not configured")
+        p = YuanbaoProvider()
+        _assert_search_ok(p.search("腾讯云", 5), "yuanbao")
+        # second call must reuse the MCP session (no second initialize)
+        _assert_search_ok(p.search("腾讯云 元宝搜索", 5), "yuanbao")
+
+
+class TestBochaLive(unittest.TestCase):
+    def test_keyed_search(self):
+        if not BOCHA_KEY:
+            self.skipTest("BOCHA_API_KEY not configured")
+        p = BochaProvider()
+        assert p.mode().value == "keyed"
+        _assert_search_ok(p.search("阿里巴巴 2024 ESG 报告", 5), "bocha")
+
+
+class TestDeepSeekLive(unittest.TestCase):
+    def test_keyed_search(self):
+        if not DEEPSEEK_KEY:
+            self.skipTest("DEEPSEEK_API_KEY not configured")
+        p = DeepSeekProvider()
+        assert p.mode().value == "keyed"
+        _assert_search_ok(p.search("DeepSeek V4", 5), "deepseek")
