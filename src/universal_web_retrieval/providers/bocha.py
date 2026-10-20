@@ -45,20 +45,10 @@ class BochaProvider(Provider):
     CAPABILITIES = frozenset({Capability.SEARCH})
     KEYED_ONLY = True
     KIND = "search"
+    TIMEOUT_CONFIG = staticmethod(config.bocha_timeout)
 
     def api_key(self) -> str:
         return config.bocha_api_key()
-
-    def _timeout(self, override: float | None):
-        configured = config.bocha_timeout()
-        if override is None:
-            return configured
-        bounded = min(override, 1.0) if override < 1.0 else override
-        return (min(configured[0], bounded), min(configured[1], bounded))
-
-    def _headers(self) -> Dict[str, str]:
-        return {"Authorization": f"Bearer {self.api_key()}",
-                "Content-Type": "application/json"}
 
     @staticmethod
     def _body_code(payload: Any) -> int | None:
@@ -83,9 +73,9 @@ class BochaProvider(Provider):
                 "freshness": "noLimit",
                 "count": max(1, min(int(limit or 10), MAX_COUNT)),
             }
-            resp = httpx.post(f"{config.bocha_base_url()}/v1/web-search",
-                              json=payload, timeout=self._timeout(timeout_override),
-                              headers=self._headers())
+            resp = self.bearer_json_post(httpx.post,
+                                         f"{config.bocha_base_url()}/v1/web-search",
+                                         payload, timeout=self._timeout(timeout_override))
             if resp.status_code >= 400:
                 raise classify_http_error(resp.status_code, resp.text, authenticated=True)
             data = resp.json()

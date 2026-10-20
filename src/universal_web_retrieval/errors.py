@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-
 class Capability(Enum):
     SEARCH = "search"
     FETCH = "fetch"
@@ -125,6 +124,7 @@ class Provider(ABC):
     CAPABILITIES: frozenset = frozenset({Capability.SEARCH, Capability.FETCH})
     KEYED_ONLY: bool = False
     KIND: str = "search"
+    TIMEOUT_CONFIG = None
 
     def mode(self) -> AuthMode:
         return AuthMode.KEYED if self.api_key() else AuthMode.KEYLESS
@@ -165,3 +165,43 @@ class Provider(ABC):
         result = fn(*args, **kwargs)
         elapsed = int((time.monotonic() - start) * 1000)
         return result, elapsed
+
+    def _timed_result(self, fn):
+        """Run a provider operation and attach its elapsed time to the result."""
+        result, elapsed = self._timed(fn)
+        result.latency_ms = elapsed
+        return result
+
+    def _timeout(self, override: float | None):
+        """Apply the shared timeout cap without rounding up small budgets."""
+        if self.TIMEOUT_CONFIG is None:
+            raise NotImplementedError(f"{self.NAME} must define TIMEOUT_CONFIG")
+        configured = self.TIMEOUT_CONFIG()
+        if override is None:
+            return configured
+        if isinstance(configured, tuple):
+            return tuple(min(value, override) for value in configured)
+        if isinstance(configured, (int, float)):
+            return min(configured, override)
+        raise TypeError(f"{self.NAME}: timeout config must be numeric or a pair")
+
+    def _headers(self) -> Dict[str, str]:
+        """Default JSON Bearer headers; keyless providers may override this."""
+        key = self.api_key()
+        return {"Authorization": f"Bearer {key}", "Content-Type": "application/json"} if key else {}
+
+    def bearer_json_post(self, post, url: str, payload: Dict[str, Any], *, timeout,
+                         headers: Optional[Dict[str, str]] = None):
+        """Send common Bearer-authenticated JSON via a provider's transport."""
+        request_headers = self._headers()
+        if headers:
+            request_headers.update(headers)
+        return post(url, json=payload, timeout=timeout, headers=request_headers)
+
+    @staticmethod
+    def bounded_timeout(configured, override: float | None):
+        if override is None:
+            return configured
+        if isinstance(configured, tuple):
+            return tuple(min(value, override) for value in configured)
+        return min(configured, override)

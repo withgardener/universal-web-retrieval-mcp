@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -150,22 +151,20 @@ class YuanbaoProvider(Provider):
     CAPABILITIES = frozenset({Capability.SEARCH})
     KEYED_ONLY = True   # no keyless/anonymous access exists for this product
     KIND = "search"
+    TIMEOUT_CONFIG = staticmethod(config.yuanbao_timeout)
 
     def __init__(self) -> None:
         self._session_id: Optional[str] = None
         self._session_for: Optional[tuple] = None
         self._rpc_id = 0
+        self._session_lock = threading.RLock()
 
     # ---- transport -----------------------------------------------------
     def api_key(self) -> str:
         return config.yuanbao_api_key()
 
     def _timeout(self, override: float | None):
-        configured = config.yuanbao_timeout()
-        if override is None:
-            return configured
-        bounded = min(override, 1.0) if override < 1.0 else override
-        return (min(configured[0], bounded), min(configured[1], bounded))
+        return super()._timeout(override)
 
     def _headers(self, session: Optional[str] = None) -> Dict[str, str]:
         headers = {
@@ -179,8 +178,9 @@ class YuanbaoProvider(Provider):
         return headers
 
     def _next_id(self) -> int:
-        self._rpc_id += 1
-        return self._rpc_id
+        with self._session_lock:
+            self._rpc_id += 1
+            return self._rpc_id
 
     @staticmethod
     def _decode(resp: httpx.Response) -> Dict[str, Any]:
@@ -215,6 +215,7 @@ class YuanbaoProvider(Provider):
             raise classify_http_error(resp.status_code, resp.text, authenticated=True)
 
     def _initialize(self, timeout) -> Optional[str]:
+        """Run the HTTP handshake without holding the session-state lock."""
         resp = self._post({
             "jsonrpc": "2.0", "id": self._next_id(), "method": "initialize",
             "params": {
@@ -237,19 +238,24 @@ class YuanbaoProvider(Provider):
             self._post({"jsonrpc": "2.0", "method": "notifications/initialized"}, timeout, session)
         except Exception:  # noqa: BLE001 — a missing ack must not break the search
             log.debug("yuanbao: initialized notification failed (ignored)", exc_info=True)
-        self._session_id = session
-        self._session_for = (config.yuanbao_mcp_url(), self.api_key())
+        with self._session_lock:
+            self._session_id = session
+            self._session_for = (config.yuanbao_mcp_url(), self.api_key())
         return session
 
     def _session(self, timeout) -> Optional[str]:
         key = (config.yuanbao_mcp_url(), self.api_key())
-        if self._session_id and self._session_for == key:
-            return self._session_id
+        with self._session_lock:
+            if self._session_id and self._session_for == key:
+                return self._session_id
+        # Initialization performs network I/O and intentionally runs without the
+        # session lock. Concurrent initializations may race; either session works.
         return self._initialize(timeout)
 
     def _reset_session(self) -> None:
-        self._session_id = None
-        self._session_for = None
+        with self._session_lock:
+            self._session_id = None
+            self._session_for = None
 
     def _call_tool(self, arguments: Dict[str, Any], timeout) -> Dict[str, Any]:
         for attempt in range(2):

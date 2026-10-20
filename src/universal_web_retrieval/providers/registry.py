@@ -22,8 +22,7 @@ from .zhipu import ZhipuProvider
 
 log = logging.getLogger("universal_web_retrieval.registry")
 
-# Instances are module-level singletons: Yuanbao caches its MCP session id on
-# the instance, and provider objects are stateless otherwise.
+# Instances are module-level singletons; Yuanbao's MCP session state is locked.
 _REGISTRY: Dict[str, Provider] = {
     p.NAME: p for p in (
         AnySearchProvider(),

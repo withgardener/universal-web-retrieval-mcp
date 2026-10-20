@@ -17,36 +17,28 @@ from ..errors import AuthMode, FetchResult, Provider, ProviderError, SearchResul
 
 class TavilyProvider(Provider):
     NAME = "tavily"
+    TIMEOUT_CONFIG = staticmethod(config.tavily_timeout)
 
     def api_key(self) -> str:
         return config.tavily_api_key()
 
-    def _timeout(self, override: float | None):
-        """(connect, read) both bounded by the remaining chain budget — no link
-        may outlive the deadline through its connect phase."""
-        configured = config.tavily_timeout()
-        if override is None:
-            return configured
-        bounded = min(override, 1.0) if override < 1.0 else override
-        return (min(configured[0], bounded), min(configured[1], bounded))
-
     def _headers(self) -> dict:
         if self.api_key():
             return {"Authorization": f"Bearer {self.api_key()}"}
-        # Official keyless access header.
         return {"X-Tavily-Access-Mode": "keyless"}
 
     def search(self, query: str, limit: int, timeout_override: float | None = None) -> SearchResult:
         def _call() -> SearchResult:
-            r = httpx.post("https://api.tavily.com/search",
-                           json={"query": query, "max_results": min(limit, 20),
-                                 "include_raw_content": False, "include_images": False},
-                           timeout=self._timeout(timeout_override), headers=self._headers())
-            if r.status_code >= 400:
-                raise classify_http_error(r.status_code, r.text, authenticated=(self.mode() == AuthMode.KEYED))
+            resp = self.bearer_json_post(httpx.post, "https://api.tavily.com/search",
+                                         {"query": query, "max_results": min(limit, 20),
+                                          "include_raw_content": False, "include_images": False},
+                                         timeout=self._timeout(timeout_override))
+            if resp.status_code >= 400:
+                raise classify_http_error(resp.status_code, resp.text,
+                                          authenticated=(self.mode() == AuthMode.KEYED))
             rows = [{"title": str(x.get("title", "")), "url": str(x.get("url", "")),
                      "snippet": str(x.get("content", ""))}
-                    for x in r.json().get("results", [])]
+                    for x in resp.json().get("results", [])]
             if not rows:
                 raise ProviderError("no results")
             return SearchResult(results=rows, provider=self.NAME, mode=self.mode())
@@ -56,15 +48,16 @@ class TavilyProvider(Provider):
 
     def fetch(self, url: str, timeout_override: float | None = None) -> FetchResult:
         def _call() -> FetchResult:
-            r = httpx.post("https://api.tavily.com/extract",
-                           json={"urls": [url], "include_images": False},
-                           timeout=self._timeout(timeout_override), headers=self._headers())
-            if r.status_code >= 400:
-                raise classify_http_error(r.status_code, r.text, authenticated=(self.mode() == AuthMode.KEYED))
-            resp = r.json()
-            results = resp.get("results", [])
+            resp = self.bearer_json_post(httpx.post, "https://api.tavily.com/extract",
+                                         {"urls": [url], "include_images": False},
+                                         timeout=self._timeout(timeout_override))
+            if resp.status_code >= 400:
+                raise classify_http_error(resp.status_code, resp.text,
+                                          authenticated=(self.mode() == AuthMode.KEYED))
+            data = resp.json()
+            results = data.get("results", [])
             if not results:
-                failed = resp.get("failed_results", []) or resp.get("failed_urls", [])
+                failed = data.get("failed_results", []) or data.get("failed_urls", [])
                 msg = str(failed[0].get("error", "extraction failed")) if failed else "no results"
                 raise ProviderError(msg)
             x = results[0]

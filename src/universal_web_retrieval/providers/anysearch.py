@@ -16,25 +16,15 @@ from ..errors import AuthMode, FetchResult, Provider, ProviderError, SearchResul
 
 class AnySearchProvider(Provider):
     NAME = "anysearch"
+    TIMEOUT_CONFIG = staticmethod(config.anysearch_timeout)
 
     def api_key(self) -> str:
         return config.anysearch_api_key()
 
-    def _timeout(self, override: float | None):
-        """(connect, read) both bounded by the remaining chain budget — no link
-        may outlive the deadline through its connect phase."""
-        configured = config.anysearch_timeout()
-        if override is None:
-            return configured
-        bounded = min(override, 1.0) if override < 1.0 else override
-        return (min(configured[0], bounded), min(configured[1], bounded))
-
     def _headers(self) -> dict:
-        # Keyless = NO Authorization header at all (official rule: "remove the
-        # Authorization entry"). Never send empty/Bearer-null values.
-        if self.api_key():
-            return {"Authorization": f"Bearer {self.api_key()}"}
-        return {}
+        # Keyless AnySearch must omit Authorization entirely.
+        key = self.api_key()
+        return {"Authorization": f"Bearer {key}"} if key else {}
 
     def search(self, query: str, limit: int, timeout_override: float | None = None) -> SearchResult:
         def _call() -> SearchResult:

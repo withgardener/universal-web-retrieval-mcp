@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import sys
 import time
@@ -29,10 +30,26 @@ logging.basicConfig(level=getattr(logging, config.log_level(), logging.WARNING),
 router = ProviderRouter()
 
 _URL_SECRET_RE = re.compile(r"(?i)([?&](?:token|api_key|apikey|key|secret|password|sig|signature|access_token)=)[^&\s]+")
+_PROVIDER_KEY_RE = re.compile(
+    r"(?i)\b(YUANBAO_API_KEY|WSA_API_KEY|BOCHA_API_KEY|DEEPSEEK_API_KEY|"
+    r"MOONSHOT_API_KEY|KIMI_API_KEY|ZHIPU_API_KEY|BIGMODEL_API_KEY|"
+    r"BRAVE_API_KEY|JINA_API_KEY)(\s*[=:]\s*)([^\s,;]+)"
+)
 
 
 def _redact_secrets(text: str) -> str:
-    """Redact credential-looking query parameters in URLs inside error text."""
+    """Redact configured provider keys and credential-looking URL parameters."""
+    for env_name in (
+        "ANYSEARCH_API_KEY", "TAVILY_API_KEY", "YUANBAO_API_KEY", "WSA_API_KEY",
+        "BOCHA_API_KEY", "DEEPSEEK_API_KEY", "MOONSHOT_API_KEY", "KIMI_API_KEY",
+        "ZHIPU_API_KEY", "BIGMODEL_API_KEY", "BRAVE_API_KEY", "JINA_API_KEY",
+    ):
+        secret = os.environ.get(env_name, "")
+        if secret:
+            secret_pattern = re.compile(
+                r"(?<![A-Za-z0-9_])" + re.escape(secret) + r"(?![A-Za-z0-9_])")
+            text = secret_pattern.sub("[REDACTED]", text)
+    text = _PROVIDER_KEY_RE.sub(r"\1\2[REDACTED]", text)
     return _URL_SECRET_RE.sub(r"\1<redacted>", text)
 MAX_RESULTS_CAP = _max_results_cap()
 
@@ -66,7 +83,7 @@ def web_search_tool(query: str, limit: int = 5, providers: list[str] | None = No
     try:
         result = router.search(str(query),
                                max(1, min(int(limit or 5), MAX_RESULTS_CAP)),
-                               providers=providers or None)
+                               providers=providers)
         return _json(result.to_dict())
     except InvalidInputError as exc:
         return _json({"success": False, "error": f"invalid input: {exc}"})
@@ -97,7 +114,7 @@ def web_fetch_tool(url: str = "", urls: list[str] | None = None,
     # Validate the per-call chain once, before any network attempt, so a typo does
     # not silently degrade to the default chain for every URL in the batch.
     try:
-        router.chain(Capability.FETCH, providers or None)
+        router.chain(Capability.FETCH, providers)
     except InvalidInputError as exc:
         return _json({"success": False, "error": f"invalid input: {exc}"})
     # ONE overall deadline for the whole batch (not per-URL).
@@ -112,7 +129,7 @@ def web_fetch_tool(url: str = "", urls: list[str] | None = None,
             continue
         try:
             out.append(router.fetch(u, deadline=batch_deadline,
-                                    providers=providers or None).to_dict())
+                                    providers=providers).to_dict())
         except InvalidInputError as exc:
             out.append({"url": u, "error": f"invalid input: {exc}", "content": "",
                         "title": "", "provider": "", "mode": ""})

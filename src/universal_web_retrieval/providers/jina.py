@@ -54,24 +54,18 @@ class JinaProvider(Provider):
     CAPABILITIES = frozenset({Capability.FETCH})
     KEYED_ONLY = False
     KIND = "fetch"
+    TIMEOUT_CONFIG = staticmethod(config.jina_timeout)
 
     def api_key(self) -> str:
         return config.jina_api_key()
-
-    def _timeout(self, override: float | None):
-        configured = config.jina_timeout()
-        if override is None:
-            return configured
-        bounded = min(override, 1.0) if override < 1.0 else override
-        return (min(configured[0], bounded), min(configured[1], bounded))
 
     def _headers(self, override: float | None) -> Dict[str, str]:
         headers = {"Accept": "application/json"}
         if self.api_key():
             headers["Authorization"] = f"Bearer {self.api_key()}"
-        # Align Reader's own server-side cutoff with the chain budget so a slow
-        # render cannot outlive the caller's deadline. Official range: 1-180s.
-        budget = override if override is not None else config.jina_timeout()[1]
+        # X-Timeout is an integer seconds field with documented range 1..180.
+        configured_read = config.jina_timeout()[1]
+        budget = min(configured_read, override) if override is not None else configured_read
         headers["X-Timeout"] = str(max(1, min(MAX_X_TIMEOUT, int(budget))))
         return headers
 

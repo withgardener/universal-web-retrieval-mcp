@@ -36,6 +36,7 @@ not a REST fetch endpoint, so there is nothing to wire into the fetch chain.
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict
 
 import httpx
@@ -47,26 +48,18 @@ from ..errors import (AuthMode, Capability, FetchResult, Provider, ProviderError
 MAX_COUNT = 50
 MAX_QUERY_CHARS = 70     # schema maxLength on search_query
 
+log = logging.getLogger("universal_web_retrieval.zhipu")
+
 
 class ZhipuProvider(Provider):
     NAME = "zhipu"
     CAPABILITIES = frozenset({Capability.SEARCH})
     KEYED_ONLY = True
     KIND = "search"
+    TIMEOUT_CONFIG = staticmethod(config.zhipu_timeout)
 
     def api_key(self) -> str:
         return config.zhipu_api_key()
-
-    def _timeout(self, override: float | None):
-        configured = config.zhipu_timeout()
-        if override is None:
-            return configured
-        bounded = min(override, 1.0) if override < 1.0 else override
-        return (min(configured[0], bounded), min(configured[1], bounded))
-
-    def _headers(self) -> Dict[str, str]:
-        return {"Authorization": f"Bearer {self.api_key()}",
-                "Content-Type": "application/json"}
 
     @staticmethod
     def _body_error(payload: Any) -> tuple:
@@ -84,17 +77,22 @@ class ZhipuProvider(Provider):
         def _call() -> SearchResult:
             if not self.api_key():
                 raise ProviderError("zhipu: no API key configured")
+            source_query = (query or "").strip()
+            search_query = source_query[:MAX_QUERY_CHARS]
+            if len(source_query) > MAX_QUERY_CHARS:
+                log.debug("zhipu: query truncated from %d to %d characters",
+                          len(source_query), len(search_query))
             body = {
-                "search_query": (query or "").strip()[:MAX_QUERY_CHARS],
+                "search_query": search_query,
                 "search_engine": config.zhipu_engine(),
                 # Required by the schema; false = skip intent detection and
                 # search directly, which is what an agent tool wants.
                 "search_intent": False,
                 "count": max(1, min(int(limit or 10), MAX_COUNT)),
             }
-            resp = httpx.post(f"{config.zhipu_base_url()}/api/paas/v4/web_search",
-                              json=body, timeout=self._timeout(timeout_override),
-                              headers=self._headers())
+            resp = self.bearer_json_post(httpx.post,
+                                         f"{config.zhipu_base_url()}/api/paas/v4/web_search",
+                                         body, timeout=self._timeout(timeout_override))
             payload: Any = {}
             try:
                 payload = resp.json()
@@ -120,6 +118,9 @@ class ZhipuProvider(Provider):
                 if code == "1703":
                     raise ProviderError(f"no results (zhipu code 1703): {message[:200]}")
                 raise ProviderError(f"zhipu code {code}: {message[:200]}")
+
+            if isinstance(payload, dict) and "error" in payload:
+                raise ProviderError(f"zhipu error: {message[:200] or 'provider returned an error envelope'}")
 
             rows = []
             for item in (payload.get("search_result") or []):

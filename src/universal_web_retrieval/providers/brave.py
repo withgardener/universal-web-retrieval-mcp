@@ -52,16 +52,10 @@ class BraveProvider(Provider):
     CAPABILITIES = frozenset({Capability.SEARCH})
     KEYED_ONLY = True
     KIND = "search"
+    TIMEOUT_CONFIG = staticmethod(config.brave_timeout)
 
     def api_key(self) -> str:
         return config.brave_api_key()
-
-    def _timeout(self, override: float | None):
-        configured = config.brave_timeout()
-        if override is None:
-            return configured
-        bounded = min(override, 1.0) if override < 1.0 else override
-        return (min(configured[0], bounded), min(configured[1], bounded))
 
     def _headers(self) -> Dict[str, str]:
         # The subscription token is a HEADER, not a Bearer credential — sending

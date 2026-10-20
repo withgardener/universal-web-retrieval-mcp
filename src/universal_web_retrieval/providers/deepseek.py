@@ -45,6 +45,7 @@ knob — the Search API takes no model parameter.
 """
 from __future__ import annotations
 
+import logging
 from typing import Dict
 
 import httpx
@@ -57,39 +58,37 @@ MAX_COUNT = 50
 MAX_QUERY_CHARS = 128
 MAX_URL_CHARS = 8192
 
+log = logging.getLogger("universal_web_retrieval.deepseek")
+
 
 class DeepSeekProvider(Provider):
     NAME = "deepseek"
     CAPABILITIES = frozenset({Capability.SEARCH, Capability.FETCH})
     KEYED_ONLY = True
     KIND = "search"
+    TIMEOUT_CONFIG = staticmethod(config.deepseek_timeout)
 
     def api_key(self) -> str:
         return config.deepseek_api_key()
 
-    def _timeout(self, override: float | None):
-        configured = config.deepseek_timeout()
-        if override is None:
-            return configured
-        bounded = min(override, 1.0) if override < 1.0 else override
-        return (min(configured[0], bounded), min(configured[1], bounded))
-
-    def _headers(self) -> Dict[str, str]:
-        return {"Authorization": f"Bearer {self.api_key()}",
-                "Content-Type": "application/json"}
-
-    def search(self, query: str, limit: int, timeout_override: float | None = None) -> SearchResult:
+    def search(self, query: str, limit: int, timeout_override: float | None = None,
+               *, original_question: str | None = None) -> SearchResult:
         def _call() -> SearchResult:
             if not self.api_key():
                 raise ProviderError("deepseek: no API key configured")
-            # The API caps the query at 128 characters (not bytes).
-            q = (query or "").strip()[:MAX_QUERY_CHARS]
-            resp = httpx.post(f"{config.deepseek_base_url()}/v1/tools/search",
-                              json={"query": q,
-                                    "count": max(1, min(int(limit or 10), MAX_COUNT)),
-                                    "need_content": False},
-                              timeout=self._timeout(timeout_override),
-                              headers=self._headers())
+            original_text = (original_question or query or "").strip()
+            original_question_value = original_text[:MAX_QUERY_CHARS]
+            search_query = (query or "").strip()[:MAX_QUERY_CHARS]
+            if len((query or "").strip()) > MAX_QUERY_CHARS:
+                log.debug("deepseek: query truncated from %d to %d characters",
+                          len((query or "").strip()), len(search_query))
+            resp = self.bearer_json_post(httpx.post,
+                                         f"{config.deepseek_base_url()}/v1/tools/search",
+                                         {"query": search_query,
+                                          "count": max(1, min(int(limit or 10), MAX_COUNT)),
+                                          "need_content": False,
+                                          "ori_question": original_question_value},
+                                         timeout=self._timeout(timeout_override))
             if resp.status_code >= 400:
                 if resp.status_code == 404:
                     raise ProviderError(f"deepseek: nothing retrievable (HTTP 404): {resp.text[:200]}")
@@ -128,10 +127,9 @@ class DeepSeekProvider(Provider):
             if len(target) > MAX_URL_CHARS:
                 # Documented request constraint: at most 8192 characters.
                 raise ProviderError(f"deepseek: url too long ({len(target)} > {MAX_URL_CHARS} chars)")
-            resp = httpx.post(f"{config.deepseek_base_url()}/v1/tools/fetch",
-                              json={"url": target},
-                              timeout=self._timeout(timeout_override),
-                              headers=self._headers())
+            resp = self.bearer_json_post(httpx.post,
+                                         f"{config.deepseek_base_url()}/v1/tools/fetch",
+                                         {"url": target}, timeout=self._timeout(timeout_override))
             if resp.status_code >= 400:
                 # 403 = rejected by the security policy, 404 = no usable page
                 # content. Neither is a credentials problem, so neither may

@@ -17,15 +17,14 @@ from ..errors import AuthMode, FetchResult, Provider, ProviderError, SearchResul
 
 class DDGSProvider(Provider):
     NAME = "ddgs"
+    TIMEOUT_CONFIG = staticmethod(config.ddgs_timeout)
 
     def api_key(self) -> str:
         return ""  # no key concept; always keyless
 
     def _client(self, timeout_override: float | None = None):
         from ddgs import DDGS
-        timeout = config.ddgs_timeout()
-        if timeout_override is not None:
-            timeout = min(timeout, timeout_override) if timeout_override >= 1.0 else min(timeout, timeout_override)
+        timeout = self._timeout(timeout_override)
         return DDGS(timeout=timeout)
 
     def search(self, query: str, limit: int, timeout_override: float | None = None) -> SearchResult:

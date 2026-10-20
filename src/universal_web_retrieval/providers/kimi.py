@@ -64,16 +64,10 @@ class KimiProvider(Provider):
     CAPABILITIES = frozenset({Capability.SEARCH, Capability.FETCH})
     KEYED_ONLY = True
     KIND = "search"
+    TIMEOUT_CONFIG = staticmethod(config.kimi_timeout)
 
     def api_key(self) -> str:
         return config.kimi_api_key()
-
-    def _timeout(self, override: float | None):
-        configured = config.kimi_timeout()
-        if override is None:
-            return configured
-        bounded = min(override, 1.0) if override < 1.0 else override
-        return (min(configured[0], bounded), min(configured[1], bounded))
 
     def _headers(self) -> Dict[str, str]:
         return {"Authorization": f"Bearer {self.api_key()}",
@@ -133,15 +127,16 @@ class KimiProvider(Provider):
             body: Dict[str, Any] = {
                 "text_query": (query or "").strip(),
                 "limit": max(1, min(int(limit or 5), MAX_LIMIT)),
+                "timeout_seconds": max(1, min(60, int(
+                    self._timeout(timeout_override)[1]))),
             }
             if tier == "pro":
                 # /search_pro documents no include_content; it returns chunks.
                 pass
             else:
                 body["include_content"] = False
-            resp = httpx.post(f"{config.kimi_base_url()}{path}", json=body,
-                              timeout=self._timeout(timeout_override),
-                              headers=self._headers())
+            resp = self.bearer_json_post(httpx.post, f"{config.kimi_base_url()}{path}", body,
+                                         timeout=self._timeout(timeout_override))
             payload: Any = {}
             if resp.status_code >= 400:
                 try:
@@ -193,10 +188,8 @@ class KimiProvider(Provider):
             if not target.lower().startswith(("http://", "https://")):
                 # Documented: only http/https are supported (400 invalid_url).
                 raise ProviderError(f"kimi: invalid url, only http/https supported: {target[:80]}")
-            resp = httpx.post(f"{config.kimi_base_url()}/v1/tools/fetch",
-                              json={"url": target},
-                              timeout=self._timeout(timeout_override),
-                              headers=self._headers())
+            resp = self.bearer_json_post(httpx.post, f"{config.kimi_base_url()}/v1/tools/fetch",
+                                         {"url": target}, timeout=self._timeout(timeout_override))
             payload: Any = {}
             if resp.status_code >= 400:
                 try:

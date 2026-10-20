@@ -97,12 +97,13 @@ class ProviderRouter:
 
     def chain(self, capability: Capability, providers: Optional[Sequence[str]] = None) -> List[Provider]:
         """Resolve the ordered provider list for one capability."""
-        if providers:
+        if providers is not None:
             kept, dropped = self._resolve(capability, providers, source="call")
             if not kept:
+                requested = ", ".join(dropped) if dropped else "<empty list>"
                 raise InvalidInputError(
                     f"none of the requested providers can serve {capability.value}: "
-                    f"{', '.join(dropped)} — available: "
+                    f"{requested} — available: "
                     f"{', '.join(_registry.providers_for(capability))}")
             return kept
         injected = self._providers.get(capability)
@@ -163,7 +164,7 @@ class ProviderRouter:
                 errors.append(f"{name}: skipped (not_configured)")
                 continue
             remaining = deadline - time.monotonic()
-            if remaining <= 0:
+            if remaining < 0.1:
                 _skip(name, "deadline")
                 errors.append(f"chain deadline ({config.chain_deadline():.0f}s) "
                               f"reached before {name}")
