@@ -178,8 +178,8 @@ class TestBatchOverallDeadline(unittest.TestCase):
         )
         for index, env_name in enumerate(key_envs):
             value = f"secret-{index}-not-for-logs"
-            os.environ[env_name] = value
-            redacted = _redact_secrets(f"upstream error: {value}")
+            with patch.dict(os.environ, {env_name: value}):
+                redacted = _redact_secrets(f"upstream error: {value}")
             self.assertNotIn(value, redacted, env_name)
             self.assertIn("[REDACTED]", redacted, env_name)
 

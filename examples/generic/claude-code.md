@@ -3,7 +3,7 @@
 ```bash
 claude mcp add universal-web-retrieval \
   --env PYTHONPATH=/path/to/universal-web-retrieval-mcp/src \
-  --env TAVILY_API_KEY=tvly-... \
+  --env TAVILY_API_KEY="${TAVILY_API_KEY}" \
   -- python -m universal_web_retrieval
 ```
 

@@ -16,6 +16,8 @@ All notable changes to this project. Format: Keep a Changelog; versioning: SemVe
   usable provider is rejected as invalid input instead of silently using defaults.
 - **`attempts`** in every response: per-provider outcome trail
   (`ok`, `error:<message>`, `skipped:not_configured`, `skipped:deadline`).
+- **Empty per-call provider lists are invalid.** `providers=None` uses the configured
+  chain; `providers=[]` returns invalid input and cannot silently invoke defaults.
 - **`list_providers` tool** — capabilities, configured/auth status, enabled flag and
   1-based position per active chain; never exposes key values.
 - **Yuanbao** (`yuanbao`) — Tencent Cloud Yuanbao Search via the official MCP
@@ -27,10 +29,11 @@ All notable changes to this project. Format: Keep a Changelog; versioning: SemVe
   fallback-eligible and are deliberately *not* reported as credential problems.
 - **Kimi** (`kimi`) — Moonshot's standalone REST tools: `/v1/tools/search`
   (`UWR_KIMI_SEARCH_TIER=pro` switches to `/v1/tools/search_pro`) and
-  `/v1/tools/fetch`. Search **and** fetch. Key: `MOONSHOT_API_KEY` (or
-  `KIMI_API_KEY`); host: `api.moonshot.cn` by default, `UWR_KIMI_BASE_URL` for
-  the international `api.moonshot.ai`. The deprecated `$web_search` chat tool is
-  not used.
+  `/v1/tools/fetch`. Search **and** fetch. Search requests include the documented
+  integer `timeout_seconds` bound to the effective chain timeout (1–60 seconds).
+  Key: `MOONSHOT_API_KEY` (or `KIMI_API_KEY`); host: `api.moonshot.cn` by default,
+  `UWR_KIMI_BASE_URL` for the international `api.moonshot.ai`. The deprecated
+  `$web_search` chat tool is not used.
 - **Zhipu BigModel** (`zhipu`) — `POST /api/paas/v4/web_search`, search only,
   engines `search_std` (default) / `search_pro` / `search_pro_sogou` /
   `search_pro_quark` via `UWR_ZHIPU_ENGINE`. Key: `ZHIPU_API_KEY` (or
@@ -59,11 +62,24 @@ All notable changes to this project. Format: Keep a Changelog; versioning: SemVe
   (independent, account level, Fetch also capped per target domain). No 5 QPS cap
   is documented for either endpoint; every QPS figure in the repo now traces to
   the official table.
-- Chain resolution, failover, deadline and timeout-override semantics unchanged.
+- Chain resolution and default routing order are unchanged; timeout handling now
+  enforces the shared hard deadline and the 100 ms no-new-attempt margin.
+
+### Fixed
+
+- Enforced a 100 ms minimum remaining chain budget before starting a provider;
+  near-deadline links are recorded as `skipped:deadline` instead of being launched
+  with an unusably small timeout.
+- Removed the process-wide HTTP lock from the shared Bearer JSON helper so
+  independent provider calls can execute concurrently. Yuanbao now locks only its
+  session state and JSON-RPC ID updates; it does not hold a lock during network I/O.
+- Capped provider connect/read timeouts to remaining chain budget without rounding
+  tiny budgets up to one second.
+- Redacted API key values from provider-named error strings in tool responses.
 
 ### Testing
 
-- 207 unit tests (was 114), all mocked — no network, no keys. The suite clears
+- 225 unit tests (was 114), all mocked — no network, no keys. The suite clears
   provider keys and `UWR_*` variables per test so it is hermetic. The additions
   cover, per new provider/capability: request shape, response mapping, error
   classification (including the 403/404 fetch cases that must not look like auth

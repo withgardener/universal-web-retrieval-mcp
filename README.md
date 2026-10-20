@@ -4,9 +4,15 @@ A universal MCP server providing resilient web search and content retrieval thro
 
 ## Overview
 
-Give any MCP-capable agent reliable web access through a single server. Universal Web Retrieval routes each request through an ordered provider chain, picks keyed or keyless authentication automatically based on which API keys are present, and falls over to the next provider on rate limits, outages, or upstream errors.
+Give any MCP-capable agent reliable web access through a single server. Universal Web Retrieval routes each request through an ordered provider chain, picks keyed or keyless authentication automatically based on which API keys are present, and moves to the next provider on rate limits, outages, or upstream errors.
 
-As of **0.2.0** the chain is no longer hard-coded: operators define it with environment variables, can disable individual providers, and agents can override the order for a single call.
+The active chains are selected in this order:
+
+1. `providers` argument passed for the call.
+2. Environment configured chain (`UWR_SEARCH_CHAIN` or `UWR_FETCH_CHAIN`).
+3. Built-in default (`anysearch,tavily,ddgs`).
+
+`providers=None` selects the configured chain. An explicitly empty list, `providers=[]`, is invalid input; it never means "use defaults". Jina Reader works keyless and is deliberately absent from both defaults. New providers are opt-in, preserving the default behavior from 0.1.x.
 
 ```
 Agent (any MCP client)
@@ -24,7 +30,7 @@ Agent (any MCP client)
 - **Auto keyed/keyless** — key configured → official keyed API; key absent → official keyless access (where the provider offers one). Keyed-only providers (Yuanbao, Bocha, DeepSeek, Kimi, Zhipu, Brave) without a key are *skipped*, never attempted, so a missing key cannot 401 the chain.
 - **Strict official APIs** — every provider is called through its official documented endpoint and auth mechanism. No scraping hacks, no undocumented endpoints.
 - **Error classification** — rate limits / outages fall over; invalid credentials fail loudly (ERROR log) and move to the next provider; malformed input never triggers fallback.
-- **Bounded latency** — per-provider timeouts plus an overall chain deadline.
+- **Bounded latency** — per-provider timeouts are capped to the remaining chain budget; the router does not start a provider call once less than 100 ms remain.
 - **Observable** — every response carries `provider`, `mode`, `latency_ms` and an `attempts` trail.
 - **Zero agent coupling** — standard MCP stdio; works with Hermes, Claude Code, OpenCode, or any MCP client.
 
@@ -147,9 +153,11 @@ When a provider exposes publication date / site (Yuanbao, Bocha, DeepSeek, Kimi,
 | Outcome | Meaning |
 |---|---|
 | `ok` | This provider produced the answer |
-| `error:<classification: message>` | Attempted and failed; the chain moved on |
+| `error:<msg>` | Attempted and failed; the chain moved on |
 | `skipped:not_configured` | Keyed-only provider without a key — never called |
-| `skipped:deadline` | Chain deadline was already exhausted |
+| `skipped:deadline` | Fewer than 100 ms remain before the chain deadline, so no call starts |
+
+**Success schema (search):** `{"success": true, "provider": ..., "mode": ..., "latency_ms": ..., "attempts": [...], "results": [...]}`. **Provider error schema:** `{"success": false, "error": "...", "attempts": [...]}`. **Invalid-input schema:** `{"success": false, "error": "invalid input: ..."}` (no `attempts`). Fetch returns one object per URL with `url`, `content`, `content_type`, `title`, `provider`, `mode`, `latency_ms`, and `attempts`; failed URLs carry `error` and `attempts` instead of success metadata.
 
 Sample failure of a mixed chain (`UWR_SEARCH_CHAIN=yuanbao,bocha,ddgs` with no Yuanbao/Bocha keys):
 
@@ -172,7 +180,7 @@ Per-call override:
 {"query": "腾讯 财报", "providers": ["yuanbao", "tavily"]}  // try Yuanbao first
 ```
 
-An override that contains no usable provider (unknown name, wrong capability, disabled) is rejected with `invalid input: none of the requested providers can serve <capability> ... — available: ...`.
+An override that contains no usable provider (including `providers=[]`) is an input error. `providers=None` means use the configured chain; an empty explicit list never falls back to the defaults.
 
 ### `web_fetch(url | urls, providers=None)`
 
@@ -241,6 +249,8 @@ Every one of those links is either free or priced per call (see the table below)
 
 ## Provider behavior
 
+The built-in chain remains `anysearch,tavily,ddgs` for search and fetch; all newly added providers are opt-in unless explicitly listed in `UWR_SEARCH_CHAIN`, `UWR_FETCH_CHAIN`, or a per-call `providers` override. Jina is keyless but deliberately absent from defaults.
+
 See [`docs/providers.md`](docs/providers.md) for each provider's official endpoint, auth mechanism, keyless behavior, pricing notes and last-verified date.
 
 | Provider | Capabilities | Auth | Key env | Price / free tier | Notes |
@@ -260,6 +270,8 @@ Official sources for every row are listed in [`docs/providers.md`](docs/provider
 
 ## Examples
 
+All provider keys below are placeholders or environment-variable references; never put live credentials in client configuration files.
+
 ### Generic MCP client (stdio)
 
 ```json
@@ -270,8 +282,8 @@ Official sources for every row are listed in [`docs/providers.md`](docs/provider
       "args": ["-m", "universal_web_retrieval"],
       "env": {
         "PYTHONPATH": "/path/to/universal-web-retrieval-mcp/src",
-        "ANYSEARCH_API_KEY": "as_sk_...",
-        "TAVILY_API_KEY": "tvly-...",
+        "ANYSEARCH_API_KEY": "${ANYSEARCH_API_KEY}",
+        "TAVILY_API_KEY": "${TAVILY_API_KEY}",
         "UWR_SEARCH_CHAIN": "anysearch,tavily,bocha,ddgs"
       }
     }
@@ -309,9 +321,31 @@ mcp_servers:
 
 ```bash
 claude mcp add universal-web-retrieval \
+  --env PYTHONPATH=/path/to/universal-web-retrieval-mcp/src \
+  --env TAVILY_API_KEY="${TAVILY_API_KEY}" \
   -- python -m universal_web_retrieval
-# with PYTHONPATH set, or after `pip install -e .`
 ```
+
+### Cursor
+
+Add a project `.cursor/mcp.json` or user MCP configuration with environment variables supplied by the launching process:
+
+```json
+{
+  "mcpServers": {
+    "universal-web-retrieval": {
+      "command": "uvx",
+      "args": ["uwr"],
+      "env": {
+        "ANYSEARCH_API_KEY": "${ANYSEARCH_API_KEY}",
+        "TAVILY_API_KEY": "${TAVILY_API_KEY}"
+      }
+    }
+  }
+}
+```
+
+For Cursor releases using its `${env:NAME}` interpolation syntax, use `"${env:ANYSEARCH_API_KEY}"` and `"${env:TAVILY_API_KEY}"`. Verify environment substitution on your Cursor version; do not replace these references with literal credentials.
 
 ## Development
 
