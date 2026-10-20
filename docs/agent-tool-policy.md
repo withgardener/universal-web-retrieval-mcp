@@ -17,10 +17,13 @@ Universal Web Retrieval (UWR) relative to its own web capabilities.
    - the host agent's native/built-in web search or fetch tools;
    - provider-specific MCP servers (e.g. a standalone AnySearch MCP, a standalone Tavily MCP);
    - other third-party search/retrieval MCP servers.
-4. The agent should not bypass UWR to call AnySearch/Tavily/DDGS directly — provider
-   selection, keyed/keyless auth, and failover are UWR's internal responsibility.
-5. Only after **all three UWR providers fail** (the tool returns a failure result)
-   may the hosting agent consider other retrieval capabilities.
+4. The agent should not bypass UWR to reach a provider directly — provider selection,
+   keyed/keyless auth, chain order and failover are UWR's internal responsibility.
+   To steer provider choice, pass the tool's `providers` argument (per call) or ask the
+   operator to change `UWR_SEARCH_CHAIN` / `UWR_FETCH_CHAIN`; `list_providers` shows
+   what is configured.
+5. Only after the **whole UWR chain fails** (the tool returns a failure result, with an
+   `attempts` trail) may the hosting agent consider other retrieval capabilities.
 
 ## Exceptions
 

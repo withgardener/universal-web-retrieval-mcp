@@ -2,12 +2,19 @@
 # Hermes 仅作为 consumer：不改任何 Hermes 源码，env 由 Hermes 传给 stdio 子进程。
 mcp_servers:
   universal-web-retrieval:
-    command: /root/.hermes_feishu_card/runtime/hermes-agent-v21.2/venv/bin/python
-    args: ["-m", "universal_web_retrieval"]
+    command: /root/.local/bin/uvx      # 生产形态：uvx 从 PyPI 拉 uwr
+    args: ["uwr"]
     transport: stdio
     enabled: true
     env:
-      PYTHONPATH: /root/.hermes/mcp-servers/universal-web-retrieval/src
       # 两个 key 都可选；缺哪个哪个走官方 keyless
-      ANYSEARCH_API_KEY: as_sk_xxx        # 可选
-      TAVILY_API_KEY: tvly-dev-xxx        # 可选
+      ANYSEARCH_API_KEY: ${ANYSEARCH_API_KEY}   # 可选
+      TAVILY_API_KEY: ${TAVILY_API_KEY}         # 可选
+      # 0.2.0 起：三个 keyed-only 检索源，只有配了 key 才会真正被调用
+      # YUANBAO_API_KEY: ${YUANBAO_API_KEY}     # 或 WSA_API_KEY
+      # BOCHA_API_KEY: ${BOCHA_API_KEY}
+      # DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      # 链顺序（不写则用默认 anysearch,tavily,ddgs）
+      # UWR_SEARCH_CHAIN: anysearch,tavily,yuanbao,bocha,ddgs
+      # UWR_FETCH_CHAIN: anysearch,tavily,ddgs
+      # UWR_DISABLED_PROVIDERS: bocha

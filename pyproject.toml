@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "uwr"
-version = "0.1.1"
+version = "0.2.0"
 # PyPI distribution name: `uwr` (target: `uvx uwr` / `pip install uwr`).
 # GitHub repo remains withgardener/universal-web-retrieval-mcp; import module
 # stays universal_web_retrieval; MCP server name stays universal-web-retrieval.
-description = "A universal MCP server providing resilient web search and content retrieval through automatic provider failover across AnySearch, Tavily, and DDGS."
+description = "A universal MCP server providing resilient web search and content retrieval through a configurable provider chain (AnySearch, Tavily, DDGS, Tencent Yuanbao Search, Bocha, DeepSeek) with automatic failover."
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
