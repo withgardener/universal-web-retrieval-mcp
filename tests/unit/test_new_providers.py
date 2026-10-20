@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from universal_web_retrieval import config
 from universal_web_retrieval.errors import Capability, ProviderError
 from universal_web_retrieval.providers import registry as provider_registry
 from universal_web_retrieval.providers.bocha import BochaProvider
@@ -433,20 +434,23 @@ class TestDeepSeek:
         with pytest.raises(ProviderError):
             self.p.search("q", 5)
 
-    def test_fetch_not_supported(self):
-        with pytest.raises(ProviderError):
-            self.p.fetch("https://x")
+    # fetch() became a real capability in 0.2.0; the full request/response/error
+    # matrix lives in tests/unit/test_more_providers.py.
 
 
 # ===================================================================== registry
 def test_new_providers_are_search_only_and_keyed():
     reg = provider_registry.registry()
-    for name in ("yuanbao", "bocha", "deepseek"):
+    for name in ("yuanbao", "bocha", "zhipu", "brave"):
         provider = reg[name]
         assert provider.CAPABILITIES == frozenset({Capability.SEARCH}), name
         assert provider.KEYED_ONLY is True, name
         assert provider.KIND == "search", name
         assert provider.not_configured() is True, name
+    # DeepSeek and Kimi ship both capabilities; both are keyed-only.
+    for name in ("deepseek", "kimi"):
+        assert reg[name].CAPABILITIES == frozenset({Capability.SEARCH, Capability.FETCH}), name
+        assert reg[name].KEYED_ONLY is True, name
     # The keyless trio keeps its official behaviour and serves both chains.
     for name in ("anysearch", "tavily", "ddgs"):
         assert reg[name].CAPABILITIES == frozenset({Capability.SEARCH, Capability.FETCH})
@@ -454,15 +458,29 @@ def test_new_providers_are_search_only_and_keyed():
         assert reg[name].is_configured() is True
 
 
-def test_new_providers_are_not_in_the_fetch_chain():
-    assert provider_registry.providers_for(Capability.FETCH) == ["anysearch", "tavily", "ddgs"]
+def test_jina_is_keyless_fetch_only_but_not_in_any_default_chain():
+    reg = provider_registry.registry()
+    jina = reg["jina"]
+    assert jina.CAPABILITIES == frozenset({Capability.FETCH})
+    assert jina.KEYED_ONLY is False
+    assert jina.KIND == "fetch"
+    # Keyless providers are always "configured", which is exactly why a keyless
+    # fetch link must never be in the defaults.
+    assert jina.is_configured() is True
+    assert "jina" not in config.DEFAULT_SEARCH_CHAIN
+    assert "jina" not in config.DEFAULT_FETCH_CHAIN
+
+
+def test_search_only_providers_are_not_in_the_fetch_chain():
+    assert provider_registry.providers_for(Capability.FETCH) == [
+        "anysearch", "tavily", "ddgs", "deepseek", "kimi", "jina"]
 
 
 def test_new_providers_are_not_in_default_search_chain(monkeypatch):
     from universal_web_retrieval.providers.router import ProviderRouter
     names = ProviderRouter().resolve_names(Capability.SEARCH)
     assert names == ["anysearch", "tavily", "ddgs"]
-    for name in ("yuanbao", "bocha", "deepseek"):
+    for name in ("yuanbao", "bocha", "deepseek", "kimi", "zhipu", "brave", "jina"):
         assert name not in names
 
 

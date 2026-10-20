@@ -16,6 +16,10 @@ Verified 2026-10-20 against the official docs:
     Result   {"results": [{rerank_score, title, url, snippet, summary, content,
                            site_name, site_icon, date, authority}]}
 
+    POST https://api.deepseek.com/v1/tools/fetch
+    Body     {"url": str (<= 8192 chars, http/https, host required, no userinfo)}
+    Result   {"title": str, "content": str}          # content is Markdown
+
 The Search API returns structured results directly — no model call, no
 AI-synthesised answer — so this is a plain ``search`` provider, NOT an
 ``answer`` provider: it is fast, deterministic and costs one flat $0.75/1k
@@ -23,10 +27,18 @@ calls rather than tokens. (A third-party npm package advertises a server-side
 ``web_search_20250305`` tool over the Anthropic-compatible endpoint; that is
 not what DeepSeek documents, and is not used here.)
 
-Errors (official table):
+Errors (official table, applies to both endpoints):
   400 invalid request | 401 bad key (auth_failure) | 402 insufficient balance
-  403 fetch rejected by policy | 404 nothing retrievable | 429 QPS exceeded
-  500 internal | 504 downstream timeout
+  403 fetch rejected by policy | 404 nothing retrievable | 408 body read timeout
+  413 body too large | 429 QPS exceeded | 500 internal | 504 downstream timeout
+
+403 and 404 on Fetch are *fetch-specific* and are NOT credential problems: 403
+means the security policy refused the URL, 404 means no usable page content.
+Both are ordinary fallback-eligible failures, so ``classify_http_error`` must not
+relabel 403 as an auth failure here.
+
+Rate limits (official, account level): Search 100 QPS, Fetch 25 QPS, and Fetch is
+additionally capped per target domain. Search and Fetch quota are independent.
 
 ``UWR_DEEPSEEK_BASE_URL`` overrides the host; there is deliberately no model
 knob — the Search API takes no model parameter.
@@ -43,11 +55,12 @@ from ..errors import (AuthMode, Capability, FetchResult, Provider, ProviderError
 
 MAX_COUNT = 50
 MAX_QUERY_CHARS = 128
+MAX_URL_CHARS = 8192
 
 
 class DeepSeekProvider(Provider):
     NAME = "deepseek"
-    CAPABILITIES = frozenset({Capability.SEARCH})
+    CAPABILITIES = frozenset({Capability.SEARCH, Capability.FETCH})
     KEYED_ONLY = True
     KIND = "search"
 
@@ -108,4 +121,40 @@ class DeepSeekProvider(Provider):
         return result
 
     def fetch(self, url: str, timeout_override: float | None = None) -> FetchResult:
-        raise ProviderError("deepseek: fetch capability not offered by this provider")
+        def _call() -> FetchResult:
+            if not self.api_key():
+                raise ProviderError("deepseek: no API key configured")
+            target = (url or "").strip()
+            if len(target) > MAX_URL_CHARS:
+                # Documented request constraint: at most 8192 characters.
+                raise ProviderError(f"deepseek: url too long ({len(target)} > {MAX_URL_CHARS} chars)")
+            resp = httpx.post(f"{config.deepseek_base_url()}/v1/tools/fetch",
+                              json={"url": target},
+                              timeout=self._timeout(timeout_override),
+                              headers=self._headers())
+            if resp.status_code >= 400:
+                # 403 = rejected by the security policy, 404 = no usable page
+                # content. Neither is a credentials problem, so neither may
+                # inherit classify_http_error's 403 -> auth_failure mapping.
+                if resp.status_code == 403:
+                    raise ProviderError("deepseek: fetch rejected by security policy "
+                                        f"(HTTP 403): {resp.text[:200]}")
+                if resp.status_code == 404:
+                    raise ProviderError("deepseek: no usable page content "
+                                        f"(HTTP 404): {resp.text[:200]}")
+                if resp.status_code == 408:
+                    raise ProviderError(f"deepseek: request body read timed out (HTTP 408): {resp.text[:200]}")
+                if resp.status_code == 413:
+                    raise ProviderError(f"deepseek: request body too large (HTTP 413): {resp.text[:200]}")
+                raise classify_http_error(resp.status_code, resp.text, authenticated=True)
+            data = resp.json()
+            content = str(data.get("content") or "")[:config.extract_char_limit()]
+            if not content.strip():
+                raise ProviderError("deepseek: empty content")
+            return FetchResult(url=str(data.get("url") or target), content=content,
+                               provider=self.NAME, mode=AuthMode.KEYED,
+                               title=str(data.get("title") or ""),
+                               content_type="text_markdown")
+        result, elapsed = self._timed(_call)
+        result.latency_ms = elapsed
+        return result

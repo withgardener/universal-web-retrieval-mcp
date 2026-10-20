@@ -114,9 +114,9 @@ class Provider(ABC):
 
     ``CAPABILITIES``  which router chains may include this provider.
     ``KEYED_ONLY``    True when the provider is useless without a key (Yuanbao,
-                      Bocha, DeepSeek). Such a link is skipped with
-                      ``skipped:not_configured`` instead of being attempted and
-                      401-ing the whole chain. AnySearch/Tavily/DDGS keep their
+                      Bocha, DeepSeek, Kimi, Zhipu, Brave). Such a link is skipped
+                      with ``skipped:not_configured`` instead of being attempted and
+                      401-ing the whole chain. AnySearch/Tavily/Jina keep their
                       official keyless behaviour and set this to False.
     ``KIND``          informational: "search" / "fetch" / "answer".
     """

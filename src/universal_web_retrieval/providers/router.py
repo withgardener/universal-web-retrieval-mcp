@@ -14,10 +14,12 @@ to the defaults; an explicitly empty/invalid *per-call* override raises
 ``InvalidInputError`` instead, so "use bocha only" can never silently run the
 whole default chain.
 
-Keyed-only providers (Yuanbao, Bocha, DeepSeek) with no key are skipped as
-``skipped:not_configured`` — they never reach the network, so a missing key can
-never 401 the chain. AnySearch/Tavily keep their official keyless behaviour and
-DDGS has no key concept, so all three are always attempted.
+Keyed-only providers (Yuanbao, Bocha, DeepSeek, Kimi, Zhipu, Brave) with no key
+are skipped as ``skipped:not_configured`` — they never reach the network, so a
+missing key can never 401 the chain. AnySearch/Tavily keep their official keyless
+behaviour, Jina Reader is genuinely usable keyless (20 RPM) and DDGS has no key
+concept, so those are always attempted. Because Jina works without a key it is
+deliberately absent from both default chains — it runs only when named.
 
 ``deadline`` is an explicit absolute monotonic timestamp (or None). Batch callers
 pass ONE shared deadline across all URLs so the overall batch is bounded; single

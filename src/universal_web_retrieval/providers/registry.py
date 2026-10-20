@@ -11,10 +11,14 @@ from typing import Dict, List
 from ..errors import Capability, Provider
 from .anysearch import AnySearchProvider
 from .bocha import BochaProvider
+from .brave import BraveProvider
 from .ddgs import DDGSProvider
 from .deepseek import DeepSeekProvider
+from .jina import JinaProvider
+from .kimi import KimiProvider
 from .tavily import TavilyProvider
 from .yuanbao import YuanbaoProvider
+from .zhipu import ZhipuProvider
 
 log = logging.getLogger("universal_web_retrieval.registry")
 
@@ -28,10 +32,15 @@ _REGISTRY: Dict[str, Provider] = {
         YuanbaoProvider(),
         BochaProvider(),
         DeepSeekProvider(),
+        KimiProvider(),
+        ZhipuProvider(),
+        BraveProvider(),
+        JinaProvider(),
     )
 }
 
-_BUILD_ORDER: tuple = ("anysearch", "tavily", "ddgs", "yuanbao", "bocha", "deepseek")
+_BUILD_ORDER: tuple = ("anysearch", "tavily", "ddgs", "yuanbao", "bocha", "deepseek",
+                       "kimi", "zhipu", "brave", "jina")
 
 
 def registry() -> Dict[str, Provider]:

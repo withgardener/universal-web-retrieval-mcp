@@ -18,6 +18,12 @@ _CLEARED_KEYS = (
     "WSA_API_KEY",
     "BOCHA_API_KEY",
     "DEEPSEEK_API_KEY",
+    "MOONSHOT_API_KEY",
+    "KIMI_API_KEY",
+    "ZHIPU_API_KEY",
+    "BIGMODEL_API_KEY",
+    "BRAVE_API_KEY",
+    "JINA_API_KEY",
 )
 
 

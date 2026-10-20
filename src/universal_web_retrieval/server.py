@@ -43,7 +43,8 @@ app = MCPServer(
     version=__version__,
     description=("A universal MCP server providing resilient web search and content "
                  "retrieval through a configurable provider chain (AnySearch, Tavily, "
-                 "DDGS, Tencent Yuanbao Search, Bocha, DeepSeek) with automatic failover."),
+                 "DDGS, Tencent Yuanbao Search, Bocha, DeepSeek, Kimi, Zhipu, Brave, "
+                 "Jina Reader) with automatic failover."),
 )
 
 
@@ -55,7 +56,7 @@ def _json(payload) -> str:
 @app.tool(name="web_search", description=(
     "Web search through a configurable provider chain with automatic failover. "
     "Default chain: AnySearch -> Tavily -> DDGS; operators can reorder/extend it "
-    "with UWR_SEARCH_CHAIN (e.g. anysearch,tavily,yuanbao,bocha,ddgs). Auth is "
+    "with UWR_SEARCH_CHAIN (e.g. anysearch,tavily,yuanbao,bocha,deepseek,kimi,ddgs). Auth is "
     "automatic: a configured API key enables keyed mode, otherwise the provider's "
     "official keyless access is used. Returns JSON: "
     "{success, provider, mode, latency_ms, attempts, results: [{title, url, snippet, "

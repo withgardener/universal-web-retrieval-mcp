@@ -59,6 +59,31 @@ def deepseek_api_key() -> str:
     return (os.environ.get("DEEPSEEK_API_KEY") or "").strip()
 
 
+def kimi_api_key() -> str:
+    """Moonshot / Kimi platform key.
+
+    Official docs and samples use ``MOONSHOT_API_KEY``; the Kimi console also
+    labels it "Kimi API key", so ``KIMI_API_KEY`` is accepted as an alias.
+    """
+    return ((os.environ.get("MOONSHOT_API_KEY") or os.environ.get("KIMI_API_KEY") or "")
+            .strip())
+
+
+def zhipu_api_key() -> str:
+    """Zhipu BigModel (智谱开放平台) key — ``ZHIPU_API_KEY`` / ``BIGMODEL_API_KEY``."""
+    return ((os.environ.get("ZHIPU_API_KEY") or os.environ.get("BIGMODEL_API_KEY") or "")
+            .strip())
+
+
+def brave_api_key() -> str:
+    return (os.environ.get("BRAVE_API_KEY") or "").strip()
+
+
+def jina_api_key() -> str:
+    """Optional: Jina Reader works without a key (lower rate limit)."""
+    return (os.environ.get("JINA_API_KEY") or "").strip()
+
+
 # Per-provider timeouts (seconds): (connect, read). Overridable via env.
 def anysearch_timeout() -> tuple:
     return (float(os.environ.get("WEB_RETRIEVAL_ANYSEARCH_CONNECT_TIMEOUT", "5") or 5),
@@ -85,6 +110,24 @@ def deepseek_timeout() -> tuple:
     return (_float_env("UWR_DEEPSEEK_CONNECT_TIMEOUT", 5.0),
             _float_env("UWR_DEEPSEEK_TIMEOUT", 20.0))
 
+def kimi_timeout() -> tuple:
+    return (_float_env("UWR_KIMI_CONNECT_TIMEOUT", 5.0),
+            _float_env("UWR_KIMI_TIMEOUT", 20.0))
+
+def zhipu_timeout() -> tuple:
+    return (_float_env("UWR_ZHIPU_CONNECT_TIMEOUT", 5.0),
+            _float_env("UWR_ZHIPU_TIMEOUT", 20.0))
+
+def brave_timeout() -> tuple:
+    return (_float_env("UWR_BRAVE_CONNECT_TIMEOUT", 5.0),
+            _float_env("UWR_BRAVE_TIMEOUT", 20.0))
+
+def jina_timeout() -> tuple:
+    # Reader drives a headless browser, so its read budget is wider than the
+    # plain JSON API providers.
+    return (_float_env("UWR_JINA_CONNECT_TIMEOUT", 5.0),
+            _float_env("UWR_JINA_TIMEOUT", 30.0))
+
 
 def yuanbao_mcp_url() -> str:
     return (os.environ.get("UWR_YUANBAO_MCP_URL")
@@ -100,6 +143,56 @@ def bocha_base_url() -> str:
 
 def deepseek_base_url() -> str:
     return (os.environ.get("UWR_DEEPSEEK_BASE_URL") or "https://api.deepseek.com").strip().rstrip("/")
+
+
+def kimi_base_url() -> str:
+    """Moonshot API host.
+
+    ``https://api.moonshot.cn`` (China, the default) and ``https://api.moonshot.ai``
+    (international) are both first-party hosts serving the same
+    ``/v1/tools/search``, ``/v1/tools/search_pro`` and ``/v1/tools/fetch``
+    endpoints; a key from one platform does not work on the other.
+    """
+    return (os.environ.get("UWR_KIMI_BASE_URL") or "https://api.moonshot.cn").strip().rstrip("/")
+
+
+KIMI_TIERS: tuple = ("basic", "pro")
+
+
+def kimi_search_tier() -> str:
+    """``UWR_KIMI_SEARCH_TIER``: ``basic`` (default) or ``pro``.
+
+    ``basic`` posts to ``/v1/tools/search`` ($0.002/call); ``pro`` posts to
+    ``/v1/tools/search_pro`` ($0.003/call). Anything unrecognised falls back to
+    ``basic`` so a typo cannot silently triple nothing — it just picks the
+    documented default.
+    """
+    value = (os.environ.get("UWR_KIMI_SEARCH_TIER") or "").strip().lower()
+    return value if value in KIMI_TIERS else "basic"
+
+
+ZHIPU_ENGINES: tuple = ("search_std", "search_pro", "search_pro_sogou", "search_pro_quark")
+
+
+def zhipu_engine() -> str:
+    """``UWR_ZHIPU_ENGINE`` — one of ``search_std`` (default), ``search_pro``,
+    ``search_pro_sogou``, ``search_pro_quark``. Unknown values fall back to the
+    documented default rather than sending a value the API would reject."""
+    value = (os.environ.get("UWR_ZHIPU_ENGINE") or "").strip().lower()
+    return value if value in ZHIPU_ENGINES else "search_std"
+
+
+def zhipu_base_url() -> str:
+    return (os.environ.get("UWR_ZHIPU_BASE_URL") or "https://open.bigmodel.cn").strip().rstrip("/")
+
+
+def brave_base_url() -> str:
+    return (os.environ.get("UWR_BRAVE_BASE_URL") or "https://api.search.brave.com").strip().rstrip("/")
+
+
+def jina_base_url() -> str:
+    """Jina Reader host — keyless, so it is never part of a default chain."""
+    return (os.environ.get("UWR_JINA_BASE_URL") or "https://r.jina.ai").strip().rstrip("/")
 
 
 # Overall chain deadline (seconds) so a full fallback walk cannot run unbounded.

@@ -297,8 +297,8 @@ def test_list_providers_reports_positions_and_never_leaks_keys(monkeypatch):
     assert by_name["anysearch"]["position"] == {"search": 1, "fetch": 1}
     # DeepSeek is not in the default chain: it advertises the capability but has
     # no position, which is reported as an explicit null (not an omitted key).
-    assert by_name["deepseek"]["position"] == {"search": None}
-    assert by_name["deepseek"]["capabilities"] == ["search"]
+    assert by_name["deepseek"]["position"] == {"search": None, "fetch": None}
+    assert by_name["deepseek"]["capabilities"] == ["fetch", "search"]
 
 
 def test_list_providers_reports_disabled(monkeypatch):
@@ -315,7 +315,8 @@ def test_list_providers_reports_disabled(monkeypatch):
 def test_list_providers_lists_every_known_provider():
     payload = json.loads(server.list_providers_tool())
     names = [row["name"] for row in payload["providers"]]
-    assert names == ["anysearch", "tavily", "ddgs", "yuanbao", "bocha", "deepseek"]
+    assert names == ["anysearch", "tavily", "ddgs", "yuanbao", "bocha", "deepseek",
+                     "kimi", "zhipu", "brave", "jina"]
     for row in payload["providers"]:
         assert set(row["capabilities"]) <= {"search", "fetch"}
         assert row["kind"] in {"search", "fetch", "answer"}

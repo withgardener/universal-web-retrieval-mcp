@@ -17,16 +17,23 @@ sys.path.insert(0, sys_path)
 
 from universal_web_retrieval.providers.anysearch import AnySearchProvider
 from universal_web_retrieval.providers.bocha import BochaProvider
+from universal_web_retrieval.providers.brave import BraveProvider
 from universal_web_retrieval.providers.ddgs import DDGSProvider
 from universal_web_retrieval.providers.deepseek import DeepSeekProvider
+from universal_web_retrieval.providers.jina import JinaProvider
+from universal_web_retrieval.providers.kimi import KimiProvider
 from universal_web_retrieval.providers.tavily import TavilyProvider
 from universal_web_retrieval.providers.yuanbao import YuanbaoProvider
+from universal_web_retrieval.providers.zhipu import ZhipuProvider
 
 ANYSEARCH_KEY = os.environ.get("ANYSEARCH_API_KEY", "").strip()
 TAVILY_KEY = os.environ.get("TAVILY_API_KEY", "").strip()
 YUANBAO_KEY = (os.environ.get("YUANBAO_API_KEY") or os.environ.get("WSA_API_KEY") or "").strip()
 BOCHA_KEY = os.environ.get("BOCHA_API_KEY", "").strip()
 DEEPSEEK_KEY = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+KIMI_KEY = (os.environ.get("MOONSHOT_API_KEY") or os.environ.get("KIMI_API_KEY") or "").strip()
+ZHIPU_KEY = (os.environ.get("ZHIPU_API_KEY") or os.environ.get("BIGMODEL_API_KEY") or "").strip()
+BRAVE_KEY = os.environ.get("BRAVE_API_KEY", "").strip()
 
 
 def _assert_search_ok(res, provider_name):
@@ -135,3 +142,46 @@ class TestDeepSeekLive(unittest.TestCase):
         p = DeepSeekProvider()
         assert p.mode().value == "keyed"
         _assert_search_ok(p.search("DeepSeek V4", 5), "deepseek")
+
+    def test_keyed_fetch(self):
+        if not DEEPSEEK_KEY:
+            self.skipTest("DEEPSEEK_API_KEY not configured")
+        _assert_fetch_ok(DeepSeekProvider().fetch("https://example.com"), "deepseek")
+
+
+class TestKimiLive(unittest.TestCase):
+    def test_keyed_search(self):
+        if not KIMI_KEY:
+            self.skipTest("MOONSHOT_API_KEY / KIMI_API_KEY not configured")
+        p = KimiProvider()
+        assert p.mode().value == "keyed"
+        _assert_search_ok(p.search("Kimi K2 release", 5), "kimi")
+
+    def test_keyed_fetch(self):
+        if not KIMI_KEY:
+            self.skipTest("MOONSHOT_API_KEY / KIMI_API_KEY not configured")
+        _assert_fetch_ok(KimiProvider().fetch("https://example.com"), "kimi")
+
+
+class TestZhipuLive(unittest.TestCase):
+    def test_keyed_search(self):
+        if not ZHIPU_KEY:
+            self.skipTest("ZHIPU_API_KEY / BIGMODEL_API_KEY not configured")
+        p = ZhipuProvider()
+        assert p.mode().value == "keyed"
+        _assert_search_ok(p.search("智谱 网络搜索", 5), "zhipu")
+
+
+class TestBraveLive(unittest.TestCase):
+    def test_keyed_search(self):
+        if not BRAVE_KEY:
+            self.skipTest("BRAVE_API_KEY not configured")
+        p = BraveProvider()
+        assert p.mode().value == "keyed"
+        _assert_search_ok(p.search("python asyncio", 5), "brave")
+
+
+class TestJinaLive(unittest.TestCase):
+    def test_keyless_fetch(self):
+        # Jina Reader documents keyless use (20 RPM); no key required.
+        _assert_fetch_ok(JinaProvider().fetch("https://example.com"), "jina")
