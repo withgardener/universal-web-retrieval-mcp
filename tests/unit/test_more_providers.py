@@ -191,8 +191,33 @@ class TestKimiSearch:
         assert kwargs["headers"]["Authorization"] == "Bearer ms-key"
         # Official field name is text_query — not "query".
         assert kwargs["json"] == {"text_query": "Kimi K2 release", "limit": 5,
-                                  "include_content": False}
+                                  "include_content": False, "timeout_seconds": 20}
         assert "query" not in kwargs["json"]
+
+    def test_kimi_basic_request_includes_server_timeout(self, monkeypatch):
+        monkeypatch.setenv("MOONSHOT_API_KEY", "test-kimi-key")
+        with patch('universal_web_retrieval.providers.kimi.httpx.post',
+                   return_value=_resp(KIMI_BASIC_OK)) as post:
+            self.p.search("Kimi K2 release", 5)
+        assert post.call_args.kwargs["json"]["timeout_seconds"] == 20
+
+    def test_kimi_timeout_follows_remaining_budget_as_integer(self, monkeypatch):
+        monkeypatch.setenv("MOONSHOT_API_KEY", "test-kimi-key")
+        monkeypatch.setenv("UWR_KIMI_TIMEOUT", "18")
+        with patch('universal_web_retrieval.providers.kimi.httpx.post',
+                   return_value=_resp(KIMI_BASIC_OK)) as post:
+            self.p.search("q", 5, timeout_override=3.7)
+        body = post.call_args.kwargs["json"]
+        assert type(body["timeout_seconds"]) is int
+        assert 1 <= body["timeout_seconds"] <= 60
+        assert body["timeout_seconds"] == 3
+
+    def test_kimi_timeout_obeys_one_second_api_minimum(self, monkeypatch):
+        monkeypatch.setenv("MOONSHOT_API_KEY", "test-kimi-key")
+        with patch('universal_web_retrieval.providers.kimi.httpx.post',
+                   return_value=_resp(KIMI_BASIC_OK)) as post:
+            self.p.search("q", 5, timeout_override=0.4)
+        assert post.call_args.kwargs["json"]["timeout_seconds"] == 1
 
     def test_kimi_api_key_alias(self, monkeypatch):
         monkeypatch.setenv("KIMI_API_KEY", "kimi-alias")
@@ -214,7 +239,8 @@ class TestKimiSearch:
             self.p.search("q", 4)
         assert post.call_args.args[0] == "https://api.moonshot.cn/v1/tools/search_pro"
         # /search_pro documents no include_content field.
-        assert post.call_args.kwargs["json"] == {"text_query": "q", "limit": 4}
+        assert post.call_args.kwargs["json"] == {"text_query": "q", "limit": 4,
+                                                  "timeout_seconds": 20}
 
     @pytest.mark.parametrize("value,expected", [
         ("", "basic"), ("BASIC", "basic"), ("pro", "pro"), (" PRO ", "pro"),
@@ -462,6 +488,32 @@ class TestZhipu:
                    return_value=_resp(ZHIPU_OK)) as post:
             self.p.search("客" * 200, 5)
         assert len(post.call_args.kwargs["json"]["search_query"]) == 70
+
+    def test_query_truncated_to_70_characters_and_reports_it(self, monkeypatch, caplog):
+        import logging
+        monkeypatch.setenv("ZHIPU_API_KEY", "test-zhipu-key")
+        with caplog.at_level(logging.DEBUG, logger="universal_web_retrieval.zhipu"), \
+             patch('universal_web_retrieval.providers.zhipu.httpx.post',
+                   return_value=_resp(ZHIPU_OK)) as post:
+            self.p.search("长" * 71, 5)
+        assert len(post.call_args.kwargs["json"]["search_query"]) == 70
+        assert "query truncated from 71 to 70 characters" in caplog.text
+
+    def test_http_200_error_envelope_without_search_result_is_provider_error(self, monkeypatch):
+        monkeypatch.setenv("ZHIPU_API_KEY", "test-zhipu-key")
+        body = {"error": {"code": "1702", "message": "no engine"}}
+        with patch('universal_web_retrieval.providers.zhipu.httpx.post',
+                   return_value=_resp(body)):
+            with pytest.raises(ProviderError, match="1702") as cm:
+                self.p.search("q", 5)
+        assert cm.value.fallback_eligible is True
+
+    def test_http_200_unstructured_error_envelope_is_provider_error(self, monkeypatch):
+        monkeypatch.setenv("ZHIPU_API_KEY", "test-zhipu-key")
+        with patch('universal_web_retrieval.providers.zhipu.httpx.post',
+                   return_value=_resp({"error": "temporary gateway failure"})):
+            with pytest.raises(ProviderError, match="temporary gateway failure"):
+                self.p.search("q", 5)
 
     def test_count_capped_at_50(self, monkeypatch):
         monkeypatch.setenv("ZHIPU_API_KEY", "k")
@@ -722,7 +774,7 @@ class TestJina:
         with patch('universal_web_retrieval.providers.jina.httpx.get',
                    return_value=_resp(JINA_OK)) as get:
             self.p.fetch("https://example.com", timeout_override=999)
-        assert get.call_args.kwargs["headers"]["X-Timeout"] == "180"
+        assert get.call_args.kwargs["headers"]["X-Timeout"] == "30"
 
     def test_target_query_string_survives(self, monkeypatch):
         with patch('universal_web_retrieval.providers.jina.httpx.get',

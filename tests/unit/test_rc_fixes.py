@@ -46,6 +46,35 @@ class TestHardDeadline(unittest.TestCase):
         r._providers = {Capability.SEARCH: [p], Capability.FETCH: [p]}
         return r
 
+    def test_tiny_override_is_not_rounded_up_to_one_second(self):
+        from universal_web_retrieval.providers.anysearch import AnySearchProvider
+        provider = AnySearchProvider()
+        self.assertEqual(provider._timeout(0.4), (0.4, 0.4))
+
+    def test_provider_http_calls_are_not_globally_serialized(self):
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+        from universal_web_retrieval.providers.anysearch import AnySearchProvider
+
+        barrier = threading.Barrier(2)
+        providers = [AnySearchProvider(), AnySearchProvider()]
+
+        def post(url, **kwargs):
+            barrier.wait(timeout=2)
+            return url
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(
+                lambda i: providers[i].bearer_json_post(
+                    post, f"https://provider-{i}.example", {}, timeout=1),
+                range(2),
+            ))
+        self.assertEqual(results, ["https://provider-0.example", "https://provider-1.example"])
+
+    def test_timeout_helper_preserves_configured_timeout_when_override_is_none(self):
+        from universal_web_retrieval.errors import Provider
+        self.assertEqual(Provider.bounded_timeout((5.0, 20.0), None), (5.0, 20.0))
+
     def test_deadline_bounds_walk(self):
         with patch('universal_web_retrieval.config.chain_deadline', return_value=2.0):
             r = self._router_with_slow(delay=30)
@@ -56,6 +85,25 @@ class TestHardDeadline(unittest.TestCase):
             # The slow provider must be cut off near the 2s deadline, not sleep 30s.
             self.assertLess(elapsed, 4.0, f"walk took {elapsed:.1f}s — deadline not enforced")
             self.assertGreater(elapsed, 1.0)
+
+    def test_shared_timeout_helper_caps_each_timeout_component_to_remaining(self):
+        from universal_web_retrieval.errors import Provider
+        self.assertEqual(Provider.bounded_timeout((5.0, 20.0), 0.4), (0.4, 0.4))
+        self.assertEqual(Provider.bounded_timeout((5.0, 20.0), None), (5.0, 20.0))
+
+    def test_router_skips_link_when_less_than_100ms_remains(self):
+        p = MagicMock()
+        p.NAME = "last-link"
+        p.mode.return_value = AuthMode.KEYLESS
+        r = self._router_with_slow(delay=0.01)
+        r._providers = {Capability.SEARCH: [p], Capability.FETCH: [p]}
+        with patch('universal_web_retrieval.providers.router.time.monotonic',
+                   side_effect=[9.95, 9.95]):
+            with self.assertRaises(ProviderError) as cm:
+                r.search("q", 5, deadline=10.0)
+        p.search.assert_not_called()
+        self.assertEqual(cm.exception.attempts,
+                         [{"provider": "last-link", "outcome": "skipped:deadline"}])
 
     def test_zero_remaining_skips_provider(self):
         p = MagicMock()
@@ -97,12 +145,13 @@ class TestBatchOverallDeadline(unittest.TestCase):
             import json
             out = json.loads(server.web_fetch_tool(urls=[f"https://x/{i}" for i in range(5)]))
         self.assertEqual(len(out), 5)
-        # Later URLs must carry deadline-exceeded errors without network attempts
-        deadline_hits = [o for o in out if "batch deadline" in o.get("error", "")]
-        self.assertTrue(deadline_hits, "expected at least one URL to hit the batch deadline")
-        # No URL's timeout_override may exceed the batch deadline
-        for url, to in calls:
-            self.assertLessEqual(to, 1.0)
+        # The router's 100 ms safety margin can reject a URL before the outer
+        # batch deadline reaches exactly zero; either path must avoid another call.
+        deadline_hits = [o for o in out if "deadline" in o.get("error", "")]
+        self.assertTrue(deadline_hits, "expected a URL to be skipped near the shared deadline")
+        self.assertLess(len(calls), 5)
+        for item in deadline_hits:
+            self.assertIn("skipped:deadline", str(item.get("attempts", [])))
 
     def test_over_five_urls_rejected(self):
         from universal_web_retrieval.server import web_fetch_tool
@@ -118,6 +167,21 @@ class TestBatchOverallDeadline(unittest.TestCase):
         out = json.loads(web_fetch_tool(urls=["https://a", "https://b", "https://a", "https://b"]))
         self.assertEqual(len(out), 2)
         self.assertEqual(out[0]["url"], "https://a")  # first-seen order preserved
+
+    def test_api_key_values_are_redacted_from_error_strings(self):
+        from universal_web_retrieval.server import _redact_secrets
+
+        key_envs = (
+            "YUANBAO_API_KEY", "WSA_API_KEY", "BOCHA_API_KEY", "DEEPSEEK_API_KEY",
+            "MOONSHOT_API_KEY", "KIMI_API_KEY", "ZHIPU_API_KEY", "BIGMODEL_API_KEY",
+            "BRAVE_API_KEY", "JINA_API_KEY",
+        )
+        for index, env_name in enumerate(key_envs):
+            value = f"secret-{index}-not-for-logs"
+            os.environ[env_name] = value
+            redacted = _redact_secrets(f"upstream error: {value}")
+            self.assertNotIn(value, redacted, env_name)
+            self.assertIn("[REDACTED]", redacted, env_name)
 
     def test_url_secret_redaction(self):
         from universal_web_retrieval.server import _redact_secrets

@@ -125,6 +125,29 @@ class TestYuanbao:
         assert call["body"]["params"]["arguments"] == {"Query": "人工智能", "Cnt": "10"}
         assert call["headers"]["Mcp-Session-Id"] == "sess-1"
 
+    def test_search_requests_do_not_hold_session_lock_during_http(self, monkeypatch):
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+
+        monkeypatch.setenv("YUANBAO_API_KEY", "concurrent-test-key")
+        provider = YuanbaoProvider()
+        provider._session_id = "session"
+        provider._session_for = (config.yuanbao_mcp_url(), "concurrent-test-key")
+        barrier = threading.Barrier(2)
+
+        def post(url, json=None, timeout=None, headers=None):
+            barrier.wait(timeout=0.4)
+            payload = {"jsonrpc": "2.0", "id": json["id"],
+                       "result": {"content": [{"type": "text",
+                                                "text": json_module.dumps(SEARCH_PAYLOAD)}],
+                                  "isError": False}}
+            return _resp(payload)
+
+        with patch("universal_web_retrieval.providers.yuanbao.httpx.post", side_effect=post):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                results = list(pool.map(lambda q: provider.search(q, 5), ("one", "two")))
+        assert [result.provider for result in results] == ["yuanbao", "yuanbao"]
+
     def test_wsa_api_key_alias(self, monkeypatch):
         monkeypatch.setenv("WSA_API_KEY", "wsa-alias")
         fake = FakeMCP()
@@ -358,7 +381,9 @@ class TestDeepSeek:
         args, kwargs = post.call_args
         assert args[0] == "https://api.deepseek.com/v1/tools/search"
         assert kwargs["headers"]["Authorization"] == "Bearer ds-key"
-        assert kwargs["json"] == {"query": "DeepSeek V4", "count": 5, "need_content": False}
+        assert kwargs["json"] == {"query": "DeepSeek V4", "count": 5,
+                                  "need_content": False,
+                                  "ori_question": "DeepSeek V4"}
         assert "model" not in kwargs["json"]   # Search API takes no model
 
     def test_base_url_override(self, monkeypatch):
@@ -395,6 +420,25 @@ class TestDeepSeek:
                    return_value=_resp(DS_OK)) as post:
             self.p.search("x" * 300, 5)
         assert len(post.call_args.kwargs["json"]["query"]) == 128
+
+    def test_search_uses_the_original_question_when_available(self, monkeypatch):
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "ds-key")
+        original_question = "Why did the database migration fail after the release?"
+        with patch('universal_web_retrieval.providers.deepseek.httpx.post',
+                   return_value=_resp(DS_OK)) as post:
+            self.p.search("database migration failure", 5, original_question=original_question)
+        assert post.call_args.kwargs["json"]["query"] == "database migration failure"
+        assert post.call_args.kwargs["json"]["ori_question"] == original_question
+
+    def test_ori_question_is_truncated_to_128_unicode_characters(self, monkeypatch):
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "test-deepseek-key")
+        query = "🧪" * 140
+        with patch('universal_web_retrieval.providers.deepseek.httpx.post',
+                   return_value=_resp(DS_OK)) as post:
+            self.p.search(query, 5)
+        body = post.call_args.kwargs["json"]
+        assert body["query"] == query[:128]
+        assert body["ori_question"] == query[:128]
 
     def test_402_is_balance_error_not_auth(self, monkeypatch):
         monkeypatch.setenv("DEEPSEEK_API_KEY", "k")

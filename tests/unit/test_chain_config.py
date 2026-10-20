@@ -148,6 +148,12 @@ def test_per_call_override_single_provider(monkeypatch):
     assert r.resolve_names(Capability.SEARCH, ["bocha"]) == ["bocha"]
 
 
+def test_per_call_override_rejects_empty_list():
+    with pytest.raises(InvalidInputError) as cm:
+        ProviderRouter().chain(Capability.SEARCH, [])
+    assert "none of the requested providers" in str(cm.value)
+
+
 def test_per_call_override_rejects_unknown_names():
     with pytest.raises(InvalidInputError) as cm:
         ProviderRouter().chain(Capability.SEARCH, ["nope"])
@@ -320,6 +326,21 @@ def test_list_providers_lists_every_known_provider():
     for row in payload["providers"]:
         assert set(row["capabilities"]) <= {"search", "fetch"}
         assert row["kind"] in {"search", "fetch", "answer"}
+
+
+def test_server_info_version_matches_package_version():
+    from universal_web_retrieval.server import app
+    assert app.version == "0.2.0"
+
+
+def test_empty_provider_list_is_invalid_on_search_and_fetch_tools(monkeypatch):
+    monkeypatch.setenv("ANYSEARCH_API_KEY", "must-not-be-used")
+    monkeypatch.setattr(server, "router", ProviderRouter())
+    search = json.loads(server.web_search_tool("q", providers=[]))
+    fetch = json.loads(server.web_fetch_tool(url="https://example.com", providers=[]))
+    assert search["success"] is False
+    assert search["error"].startswith("invalid input:")
+    assert fetch["error"].startswith("invalid input:")
 
 
 def test_web_search_tool_response_shape(monkeypatch):
