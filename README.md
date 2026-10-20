@@ -1,6 +1,6 @@
 # Universal Web Retrieval MCP
 
-A universal MCP server providing resilient web search and content retrieval through a **configurable provider chain** — AnySearch, Tavily, DDGS, Tencent Yuanbao Search, Bocha and DeepSeek — with automatic failover.
+A universal MCP server providing resilient web search and content retrieval through a **configurable provider chain** — AnySearch, Tavily, DDGS, Tencent Yuanbao Search, Bocha, DeepSeek, Kimi, Zhipu BigModel, Brave Search and Jina Reader — with automatic failover.
 
 ## Overview
 
@@ -21,7 +21,7 @@ Agent (any MCP client)
 - **Configurable chains** — `UWR_SEARCH_CHAIN` / `UWR_FETCH_CHAIN` set the order; `UWR_DISABLED_PROVIDERS` switches providers off without editing the chains.
 - **Per-call override** — `web_search(..., providers=["bocha"])` or `["yuanbao","tavily"]` runs just that order for one call.
 - **Automatic provider failover** — one provider failing never fails the tool.
-- **Auto keyed/keyless** — key configured → official keyed API; key absent → official keyless access (where the provider offers one). Keyed-only providers (Yuanbao, Bocha, DeepSeek) without a key are *skipped*, never attempted, so a missing key cannot 401 the chain.
+- **Auto keyed/keyless** — key configured → official keyed API; key absent → official keyless access (where the provider offers one). Keyed-only providers (Yuanbao, Bocha, DeepSeek, Kimi, Zhipu, Brave) without a key are *skipped*, never attempted, so a missing key cannot 401 the chain.
 - **Strict official APIs** — every provider is called through its official documented endpoint and auth mechanism. No scraping hacks, no undocumented endpoints.
 - **Error classification** — rate limits / outages fall over; invalid credentials fail loudly (ERROR log) and move to the next provider; malformed input never triggers fallback.
 - **Bounded latency** — per-provider timeouts plus an overall chain deadline.
@@ -43,7 +43,11 @@ src/universal_web_retrieval/
     ├── ddgs.py          # DDGS (official package; text + extract)
     ├── yuanbao.py       # Tencent Yuanbao Search (MCP over Streamable HTTP, Bearer)
     ├── bocha.py         # Bocha Web Search API (REST, Bearer)
-    └── deepseek.py      # DeepSeek Search API (REST, Bearer)
+    ├── deepseek.py      # DeepSeek Search + Fetch API (REST, Bearer)
+    ├── kimi.py          # Kimi/Moonshot search + search_pro + fetch (REST, Bearer)
+    ├── zhipu.py         # Zhipu BigModel web_search (REST, Bearer)
+    ├── brave.py         # Brave Search API (REST, X-Subscription-Token)
+    └── jina.py          # Jina Reader r.jina.ai (keyless or Bearer, fetch only)
 ```
 
 ## Installation
@@ -90,7 +94,13 @@ Unknown names, providers lacking the capability, and disabled providers are drop
 | `TAVILY_API_KEY` | no | Tavily keyed mode; absent → official keyless (`X-Tavily-Access-Mode: keyless`) |
 | `YUANBAO_API_KEY` (alias `WSA_API_KEY`) | for `yuanbao` | Tencent Yuanbao Search service key |
 | `BOCHA_API_KEY` | for `bocha` | Bocha Web Search API key |
-| `DEEPSEEK_API_KEY` | for `deepseek` | DeepSeek API key (Search API) |
+| `DEEPSEEK_API_KEY` | for `deepseek` | DeepSeek API key (Search + Fetch API) |
+| `MOONSHOT_API_KEY` (alias `KIMI_API_KEY`) | for `kimi` | Kimi / Moonshot platform key |
+| `ZHIPU_API_KEY` (alias `BIGMODEL_API_KEY`) | for `zhipu` | Zhipu BigModel (智谱) key |
+| `BRAVE_API_KEY` | for `brave` | Brave Search API subscription token |
+| `JINA_API_KEY` | no | Jina Reader key — optional (keyless 20 RPM, with free key 500 RPM) |
+| `UWR_KIMI_SEARCH_TIER` | no | `basic` (default) → `/v1/tools/search` $0.002/call; `pro` → `/v1/tools/search_pro` $0.003/call |
+| `UWR_ZHIPU_ENGINE` | no | `search_std` (default) / `search_pro` / `search_pro_sogou` / `search_pro_quark` |
 | `WEB_RETRIEVAL_TIMEOUT` | no | Overall chain deadline in seconds (default 45) |
 | `WEB_RETRIEVAL_LOG_LEVEL` | no | `WARNING` default; logs go to **stderr** (stdout is MCP JSON-RPC) |
 | `WEB_RETRIEVAL_MAX_RESULTS` | no | Cap for `web_search.limit` (default 20) |
@@ -101,9 +111,17 @@ Unknown names, providers lacking the capability, and disabled providers are drop
 | `UWR_YUANBAO_CONNECT_TIMEOUT` / `UWR_YUANBAO_TIMEOUT` | no | Yuanbao timeouts (5s / 20s) |
 | `UWR_BOCHA_CONNECT_TIMEOUT` / `UWR_BOCHA_TIMEOUT` | no | Bocha timeouts (5s / 20s) |
 | `UWR_DEEPSEEK_CONNECT_TIMEOUT` / `UWR_DEEPSEEK_TIMEOUT` | no | DeepSeek timeouts (5s / 20s) |
+| `UWR_KIMI_CONNECT_TIMEOUT` / `UWR_KIMI_TIMEOUT` | no | Kimi timeouts (5s / 20s) |
+| `UWR_ZHIPU_CONNECT_TIMEOUT` / `UWR_ZHIPU_TIMEOUT` | no | Zhipu timeouts (5s / 20s) |
+| `UWR_BRAVE_CONNECT_TIMEOUT` / `UWR_BRAVE_TIMEOUT` | no | Brave timeouts (5s / 20s) |
+| `UWR_JINA_CONNECT_TIMEOUT` / `UWR_JINA_TIMEOUT` | no | Jina timeouts (5s / 30s — Reader drives a browser) |
 | `UWR_YUANBAO_MCP_URL` | no | Override the Yuanbao MCP endpoint |
 | `UWR_BOCHA_BASE_URL` | no | `https://api.bochaai.com` (or `https://api.bocha.cn`) |
 | `UWR_DEEPSEEK_BASE_URL` | no | Default `https://api.deepseek.com` |
+| `UWR_KIMI_BASE_URL` | no | `https://api.moonshot.cn` (default) or `https://api.moonshot.ai` (international) |
+| `UWR_ZHIPU_BASE_URL` | no | Default `https://open.bigmodel.cn` |
+| `UWR_BRAVE_BASE_URL` | no | Default `https://api.search.brave.com` |
+| `UWR_JINA_BASE_URL` | no | Default `https://r.jina.ai` |
 
 Every key is read **at call time**, so a restart of the MCP server process is enough for new values to take effect (for Hermes: the `mcp_servers` env is frozen at gateway start — restart the gateway or kill the child process).
 
@@ -122,7 +140,7 @@ Every key is read **at call time**, so a restart of the MCP server process is en
 }
 ```
 
-When a provider exposes publication date / site (Yuanbao, Bocha, DeepSeek), the result rows also carry `published`, `site` and (where scored) `score`. `provider` / `mode` / `latency_ms` / `attempts` are diagnostic metadata — consumers only need `results`.
+When a provider exposes publication date / site (Yuanbao, Bocha, DeepSeek, Kimi, Zhipu, Brave), the result rows also carry `published`, `site` and (where scored) `score`. `provider` / `mode` / `latency_ms` / `attempts` are diagnostic metadata — consumers only need `results`.
 
 `attempts` is the per-provider outcome trail in chain order:
 
@@ -202,34 +220,43 @@ Batch behavior: `urls` is capped at **5 per call** (larger batches are rejected 
 
 ## Routing & fallback
 
-| Capability | Default chain | Search-only members available on request |
+| Capability | Default chain | Optional members, on request only |
 |---|---|---|
-| `web_search` | AnySearch → Tavily → DDGS | Yuanbao → Bocha → DeepSeek |
-| `web_fetch` | AnySearch → Tavily → DDGS.extract | — (the three new providers are search-only) |
+| `web_search` | AnySearch → Tavily → DDGS | Yuanbao, Bocha, DeepSeek, Kimi, Zhipu, Brave |
+| `web_fetch` | AnySearch → Tavily → DDGS.extract | DeepSeek, Kimi, Jina (search-only providers are dropped from fetch chains) |
 
 A link is skipped when: rate-limited (429), timed out, upstream 5xx, or any provider error. **Invalid credentials fail loudly** (ERROR log `AUTH FAILURE on <provider>`) and the chain moves to the next provider — a wrong key is never silently retried as keyless on the same provider. Malformed input (empty query, bad URL scheme) returns an immediate input error with no fallback.
 
-**Recommended chains.** Defaults stay minimal so existing deployments are unchanged. If you have the keys, a China-friendly ordering is:
+**Example chains (not defaults).** Defaults stay minimal so existing deployments are unchanged. If you hold the keys, this is a sensible China-friendly ordering — deepseek/kimi give independent indexes and correct `published` dates, and `ddgs` stays last as the keyless floor:
 
 ```yaml
-UWR_SEARCH_CHAIN: anysearch,tavily,yuanbao,bocha,ddgs
-UWR_FETCH_CHAIN: anysearch,tavily,ddgs
+UWR_SEARCH_CHAIN: anysearch,tavily,deepseek,kimi,yuanbao,ddgs
+UWR_FETCH_CHAIN: anysearch,tavily,deepseek,kimi,ddgs
 ```
 
-Keep `ddgs` last (keyless, no quota) and leave DeepSeek out of the default chain unless you want its results in the mix — it is billed per call and its index differs from the others.
+Every one of those links is either free or priced per call (see the table below), and each one falls through on error, so a longer chain costs nothing when earlier links succeed. Two rules worth keeping:
+
+- **Keep `ddgs` last** — keyless, no quota, the floor of the chain.
+- **Never put `jina` in a default chain** — it works without a key, so a stale/keyless deployment would start sending every fetch through it. Add it explicitly when you want its Markdown quality, e.g. `UWR_FETCH_CHAIN: anysearch,tavily,jina,ddgs`.
 
 ## Provider behavior
 
 See [`docs/providers.md`](docs/providers.md) for each provider's official endpoint, auth mechanism, keyless behavior, pricing notes and last-verified date.
 
-| Provider | Capabilities | Auth | Notes |
-|---|---|---|---|
-| AnySearch | search + fetch | keyed Bearer / keyless (no auth header) | default first link |
-| Tavily | search + fetch | keyed Bearer / keyless header | 1,000 free credits/month |
-| DDGS | search + fetch | none | keyless package; JS/login pages not guaranteed |
-| Yuanbao (元宝搜索) | search | keyed only (`Authorization: Bearer`) | Tencent MCP endpoint, `SearchPro`, Cnt 10–50 |
-| Bocha (博查) | search | keyed only | `POST /v1/web-search`, count 1–50, `summary: true` |
-| DeepSeek | search | keyed only | `POST /v1/tools/search`, count 1–50, $0.75/1k calls |
+| Provider | Capabilities | Auth | Key env | Price / free tier | Notes |
+|---|---|---|---|---|---|
+| AnySearch | search + fetch | keyed Bearer / keyless (no auth header) | `ANYSEARCH_API_KEY` | plan-based | default first link |
+| Tavily | search + fetch | keyed Bearer / keyless header | `TAVILY_API_KEY` | 1,000 free credits/month | default second link |
+| DDGS | search + fetch | none | — | free, no quota | default last link; JS/login pages not guaranteed |
+| Yuanbao (元宝搜索) | search | keyed only | `YUANBAO_API_KEY` / `WSA_API_KEY` | 14–26 CNY / 1k calls by tier | Tencent MCP endpoint, `SearchPro`, Cnt 10–50 |
+| Bocha (博查) | search | keyed only | `BOCHA_API_KEY` | 0.036 CNY/call; 1,000 free trial calls (3 months) | `POST /v1/web-search`, count 1–50, `summary: true` |
+| DeepSeek | search + fetch | keyed only | `DEEPSEEK_API_KEY` | $0.75 / 1k successful calls (same for search and fetch) | `POST /v1/tools/search`, `/v1/tools/fetch`; 100 QPS search, 25 QPS fetch |
+| Kimi (Moonshot) | search + fetch | keyed only | `MOONSHOT_API_KEY` / `KIMI_API_KEY` | $0.002 basic search, $0.003 pro search, $0.002 fetch; billed only on HTTP 200 with results | `text_query` + `search_results`; CN `api.moonshot.cn`, intl `api.moonshot.ai` |
+| Zhipu BigModel (智谱) | search | keyed only | `ZHIPU_API_KEY` / `BIGMODEL_API_KEY` | `search_std` 0.01, `search_pro` 0.03, `search_pro_sogou` 0.05, `search_pro_quark` 0.05 CNY/call | `POST /api/paas/v4/web_search`; engine via `UWR_ZHIPU_ENGINE` |
+| Brave Search | search | keyed only | `BRAVE_API_KEY` | $5.00 / 1k requests, **$5 free credits every month** (≈1k requests) | `X-Subscription-Token` header, count 1–20, 50 req/s |
+| Jina Reader | fetch | keyless (20 RPM) or keyed Bearer (500 RPM free key) | `JINA_API_KEY` (optional) | free tier: 20 RPM keyless, 500 RPM with a free key | `GET https://r.jina.ai/?url=…` + `Accept: application/json`; **never in a default chain** |
+
+Official sources for every row are listed in [`docs/providers.md`](docs/providers.md#定价与免费额度2026-10-20-核验). Prices are catalogue list prices as published on 2026-10-20 and may change; the provider's own pricing page is authoritative.
 
 ## Examples
 
@@ -270,7 +297,12 @@ mcp_servers:
       # YUANBAO_API_KEY: ${YUANBAO_API_KEY}
       # BOCHA_API_KEY: ${BOCHA_API_KEY}
       # DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
-      # UWR_SEARCH_CHAIN: anysearch,tavily,yuanbao,bocha,ddgs
+      # MOONSHOT_API_KEY: ${MOONSHOT_API_KEY}
+      # ZHIPU_API_KEY: ${ZHIPU_API_KEY}
+      # BRAVE_API_KEY: ${BRAVE_API_KEY}
+      # JINA_API_KEY: ${JINA_API_KEY}
+      # UWR_SEARCH_CHAIN: anysearch,tavily,deepseek,kimi,yuanbao,ddgs
+      # UWR_FETCH_CHAIN: anysearch,tavily,deepseek,kimi,ddgs
 ```
 
 ### Claude Code
