@@ -35,6 +35,11 @@ function request(url, redirects = 5) {
           res.resume();
           if (redirects <= 0) return reject(new Error(`too many redirects for ${url}`));
           const next = new URL(res.headers.location, url).toString();
+          // Never follow an https -> http downgrade (the sha256 check would still catch tampering,
+          // but there is no reason to fetch the archive in clear text).
+          if (parsed.protocol === 'https:' && !next.startsWith('https:')) {
+            return reject(new Error(`refusing insecure redirect from ${url} to ${next}`));
+          }
           return resolve(request(next, redirects - 1));
         }
         if (status !== 200) {
@@ -77,7 +82,12 @@ function assetStem(asset) {
 }
 
 function extractArchive(archive, destDir, platform) {
-  const args = /\.zip$/i.test(archive) ? ['-xf', archive, '-C', destDir] : ['-xzf', archive, '-C', destDir];
+  // --no-same-owner: as root, GNU tar otherwise tries to chown to the archive's uid/gid (1001 for
+  // uv's CI builds) and fails on overlay/rootless filesystems, which is common in Docker and CI.
+  const owner = platform === 'win32' ? [] : ['--no-same-owner'];
+  const args = /\.zip$/i.test(archive)
+    ? ['-xf', archive, '-C', destDir]
+    : ['-xzf', archive, ...owner, '-C', destDir];
   const result = spawnSync('tar', args, { stdio: ['ignore', 'ignore', 'pipe'], encoding: 'utf8' });
   if (result.error) {
     throw new Error(`could not run \`tar\` to unpack uv: ${result.error.message}`);

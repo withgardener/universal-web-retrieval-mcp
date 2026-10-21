@@ -131,3 +131,43 @@ test('a verified download is unpacked and cached, following redirects', async ()
   assert.deepStrictEqual(fs.readdirSync(cacheDir), ['uv'], 'no archive or unpacked directory left behind');
   assert.ok(!fs.existsSync(path.join(cacheDir, stem)));
 });
+
+test('archives owned by a foreign uid unpack without chown (tar --no-same-owner)', () => {
+  // Regression: uv's release tarballs are owned by uid 1001; as root, GNU tar tried to chown and
+  // failed on overlay filesystems, so the launcher fell back to "install uv" after a good download.
+  const { extractArchive } = require('../lib/download');
+  const dir = tempDir('uwr-owner-');
+  const stem = 'uv-x86_64-unknown-linux-gnu';
+  const src = path.join(dir, 'src', stem);
+  fs.mkdirSync(src, { recursive: true });
+  fs.writeFileSync(path.join(src, 'uv'), '#!/bin/sh\n');
+  const archive = path.join(dir, 'a.tar.gz');
+  const made = spawnSync('tar', ['-czf', archive, '--owner=1001', '--group=117', '-C', path.join(dir, 'src'), stem], { encoding: 'utf8' });
+  assert.strictEqual(made.status, 0, made.stderr);
+  const out = path.join(dir, 'out');
+  fs.mkdirSync(out);
+  extractArchive(archive, out, 'linux');
+  assert.ok(fs.existsSync(path.join(out, stem, 'uv')));
+});
+
+test('an https download refuses to follow a redirect to plain http', async () => {
+  const { request } = require('../lib/download');
+  const https = require('node:https');
+  const orig = https.get;
+  https.get = (url, opts, cb) => {
+    const { EventEmitter } = require('node:events');
+    const res = new EventEmitter();
+    res.statusCode = 302;
+    res.headers = { location: 'http://evil.example/uv.tar.gz' };
+    res.resume = () => {};
+    const req = new EventEmitter();
+    req.setTimeout = () => req;
+    process.nextTick(() => cb(res));
+    return req;
+  };
+  try {
+    await assert.rejects(request('https://github.com/astral-sh/uv/releases/download/x/uv.tar.gz'), /insecure redirect/);
+  } finally {
+    https.get = orig;
+  }
+});
