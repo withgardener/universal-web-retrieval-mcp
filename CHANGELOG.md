@@ -27,6 +27,15 @@ All notable changes to this project. Format: Keep a Changelog; versioning: SemVe
 - README installation routes: `uvx`, `npx` and `pip` are the documented ways to
   run the server; `PYTHONPATH=src` is now only the from-source development path.
 
+### Fixed
+
+- **Launcher `python` runner silently dropped every argument.**
+  `UWR_NPM_RUNNER=python` ran `python -m universal_web_retrieval`, which starts
+  `__main__.py` and ignores `sys.argv`, so `npx -y uwr --version` printed nothing
+  and exited 0. It now runs `python -m universal_web_retrieval.cli` — the same
+  entry point as the `uwr` console script — so forwarded flags behave as
+  documented.
+
 ## 0.2.0 — 2026-10-20
 
 ### Added

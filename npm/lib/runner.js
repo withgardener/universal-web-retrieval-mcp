@@ -81,7 +81,11 @@ function baseArgs(runner, version = VERSION) {
     case 'pipx':
       return ['run', '--spec', `uwr==${version}`, 'uwr'];
     case 'python':
-      return ['-m', 'universal_web_retrieval'];
+      // Must be the CLI module, not `universal_web_retrieval`: running the package lands on
+      // __main__.py, which ignores sys.argv and silently drops every forwarded flag (so
+      // `npx -y uwr --version` printed nothing and exited 0). cli.py has a __main__ guard,
+      // so `-m universal_web_retrieval.cli` behaves exactly like the `uwr` console script.
+      return ['-m', 'universal_web_retrieval.cli'];
     case 'bundled-uv':
       return ['tool', 'run', '--from', `uwr==${version}`, 'uwr'];
     default:

@@ -31,6 +31,19 @@ test('a zero exit from the server is a zero exit from the launcher', () => {
   assert.deepStrictEqual(JSON.parse(result.stdout.trim()).argv, ['tool', 'run', '--from', `uwr==${VERSION}`, 'uwr']);
 });
 
+test('the python runner forwards arguments to the CLI module', () => {
+  // Same regression as runner.test.js, seen end to end: a stub python3 proves what the launcher
+  // actually executes, and that `--version` is not swallowed.
+  const dir = makeStubDir(['python3']);
+  const env = baseEnv({ PATH: dir, UWR_NPM_RUNNER: 'python' });
+  const result = runLauncher(['--version'], env);
+
+  assert.strictEqual(result.status, 0);
+  const recorded = JSON.parse(result.stdout.trim());
+  assert.strictEqual(recorded.tool, 'python3');
+  assert.deepStrictEqual(recorded.argv, ['-m', 'universal_web_retrieval.cli', '--version']);
+});
+
 test('--launcher-info prints JSON to stdout and never starts the server', () => {
   const dir = makeStubDir(['uvx']);
   const env = baseEnv({ PATH: dir });

@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { resolvePlan, VERSION, PIN } = require('../lib/runner');
-const { baseEnv, makeStubDir, tempDir } = require('./helpers');
+const { baseEnv, makeStubDir, tempDir, REPO_ROOT } = require('./helpers');
 
 const PLATFORM = 'linux';
 const EXPECTED = `uwr==${VERSION}`;
@@ -59,11 +59,19 @@ test('UWR_NPM_RUNNER=uvx overrides a uv-first PATH', () => {
   assert.strictEqual(plan.runner, 'uvx');
 });
 
-test('UWR_NPM_RUNNER=python maps to `python -m universal_web_retrieval`', () => {
+test('UWR_NPM_RUNNER=python runs the CLI module so forwarded arguments are honoured', () => {
+  // Regression: `-m universal_web_retrieval` lands on __main__.py, which ignores sys.argv, so
+  // `npx -y uwr --version` printed nothing and exited 0 (the --version flag was silently dropped).
+  // The `uwr` console script points at cli:main and cli.py has a __main__ guard, so
+  // `-m universal_web_retrieval.cli` behaves exactly like the console script.
   const dir = makeStubDir(['python3', 'uvx']);
   const plan = resolvePlan({ env: { PATH: dir, UWR_NPM_RUNNER: 'python' }, platform: PLATFORM });
   assert.strictEqual(plan.runner, 'python');
-  assert.deepStrictEqual(plan.args, ['-m', 'universal_web_retrieval']);
+  assert.deepStrictEqual(plan.args, ['-m', 'universal_web_retrieval.cli']);
+
+  const cli = fs.readFileSync(path.join(REPO_ROOT, 'src', 'universal_web_retrieval', 'cli.py'), 'utf8');
+  assert.match(cli, /if __name__ == ["']__main__["']/, 'cli.py must stay runnable through `python -m`');
+  assert.match(cli, /--version/, 'the module the python runner starts must handle --version');
 });
 
 test('UWR_NPM_RUNNER=bundled-uv asks for a download when the cache is empty', () => {

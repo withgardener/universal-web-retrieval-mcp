@@ -70,7 +70,7 @@ version is pinned to this package's version) in this order:
    download.
 6. Otherwise it prints install hints and exits 1.
 
-`python` (`UWR_NPM_RUNNER=python`) runs `python -m universal_web_retrieval`, i.e.
+`python` (`UWR_NPM_RUNNER=python`) runs `python -m universal_web_retrieval.cli`, i.e.
 an `uwr` you installed yourself with `pip install uwr`.
 
 ### Environment switches
