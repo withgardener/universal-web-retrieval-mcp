@@ -1,0 +1,46 @@
+{
+  "name": "uwr",
+  "version": "0.2.0",
+  "description": "npx launcher for the UWR (Universal Web Retrieval) MCP server: resilient web search and fetch through a configurable provider chain with automatic failover.",
+  "license": "MIT",
+  "author": "withgardener",
+  "homepage": "https://github.com/withgardener/universal-web-retrieval-mcp#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/withgardener/universal-web-retrieval-mcp.git",
+    "directory": "npm"
+  },
+  "bugs": {
+    "url": "https://github.com/withgardener/universal-web-retrieval-mcp/issues"
+  },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "web-search",
+    "web-fetch",
+    "web-retrieval",
+    "universal-web-retrieval",
+    "ai-agent",
+    "llm"
+  ],
+  "bin": {
+    "uwr": "bin/uwr.js"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}
