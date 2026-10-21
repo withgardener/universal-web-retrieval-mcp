@@ -11,8 +11,23 @@ const NPM_DIR = path.join(__dirname, '..');
 const REPO_ROOT = path.join(NPM_DIR, '..');
 const BIN = path.join(NPM_DIR, 'bin', 'uwr.js');
 
+// Every temp dir made by a test is removed when the test process exits, so repeated runs (and CI
+// re-runs) do not leave uwr-* directories behind in $TMPDIR.
+const created = [];
+process.on('exit', () => {
+  for (const dir of created) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* best effort */
+    }
+  }
+});
+
 function tempDir(prefix = 'uwr-npm-test-') {
-  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  created.push(dir);
+  return dir;
 }
 
 // Writes stub executables named after real tools. Each stub records the tool
