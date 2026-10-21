@@ -2,6 +2,33 @@
 
 A universal MCP server providing resilient web search and content retrieval through a **configurable provider chain** — AnySearch, Tavily, DDGS, Tencent Yuanbao Search, Bocha, DeepSeek, Kimi, Zhipu BigModel, Brave Search and Jina Reader — with automatic failover.
 
+## Quick Start
+
+**No API key is required.** With no keys configured the server uses the keyless
+mode of AnySearch/Tavily and falls back to keyless DDGS.
+
+uvx (zero config, recommended):
+
+```json
+{"mcpServers": {"universal-web-retrieval": {"command": "uvx", "args": ["uwr"]}}}
+```
+
+npx (same server, no Python toolchain needed — the launcher fetches a runner):
+
+```json
+{"mcpServers": {"universal-web-retrieval": {"command": "npx", "args": ["-y", "uwr"]}}}
+```
+
+pip:
+
+```bash
+pip install uwr
+uwr        # stdio MCP server
+```
+
+API keys are **optional**: add `TAVILY_API_KEY`, `ANYSEARCH_API_KEY` (or any of
+the others) to the `env` block when you have them. See [Configuration](#configuration).
+
 ## Overview
 
 Give any MCP-capable agent reliable web access through a single server. Universal Web Retrieval routes each request through an ordered provider chain, picks keyed or keyless authentication automatically based on which API keys are present, and moves to the next provider on rate limits, outages, or upstream errors.
@@ -59,20 +86,25 @@ src/universal_web_retrieval/
 ## Installation
 
 ```bash
-# from PyPI (distribution name):
-pip install uwr
-# or from source:
-pip install git+https://github.com/withgardener/universal-web-retrieval-mcp.git
+pip install uwr                    # from PyPI
+uvx uwr                            # or run without installing
+npx -y uwr                         # or through the npm launcher
 
-# run (stdio MCP):
-uwr
-# or:
-PYTHONPATH=src python -m universal_web_retrieval
-# version:
-uwr --version
+uwr --version                      # uwr 0.2.0
+uwr                                # run the stdio MCP server
 ```
 
 `ddgs` is a **runtime dependency** (the fixed final fallback of the default chains), not an optional extra. Dependencies are pinned to compatible ranges (`mcp>=2,<3`, `httpx>=0.27,<1`, `ddgs>=9.16,<10`) so a major-version breaking change never ships to a running server via a routine `pip update`.
+
+### From source (development)
+
+```bash
+git clone https://github.com/withgardener/universal-web-retrieval-mcp.git
+cd universal-web-retrieval-mcp
+pip install -e .
+
+uwr                                # or: PYTHONPATH=src python -m universal_web_retrieval
+```
 
 ## Configuration
 
@@ -278,10 +310,9 @@ All provider keys below are placeholders or environment-variable references; nev
 {
   "mcpServers": {
     "universal-web-retrieval": {
-      "command": "python",
-      "args": ["-m", "universal_web_retrieval"],
+      "command": "uvx",
+      "args": ["uwr"],
       "env": {
-        "PYTHONPATH": "/path/to/universal-web-retrieval-mcp/src",
         "ANYSEARCH_API_KEY": "${ANYSEARCH_API_KEY}",
         "TAVILY_API_KEY": "${TAVILY_API_KEY}",
         "UWR_SEARCH_CHAIN": "anysearch,tavily,bocha,ddgs"
@@ -290,6 +321,11 @@ All provider keys below are placeholders or environment-variable references; nev
   }
 }
 ```
+
+Swap `"command": "uvx", "args": ["uwr"]` for `"command": "npx", "args": ["-y", "uwr"]`
+where npm is the only package manager available, or for
+`"command": "python", "args": ["-m", "universal_web_retrieval"]` when running the
+[from-source](#from-source-development) checkout with `PYTHONPATH` set.
 
 ### Hermes Agent
 
@@ -321,9 +357,8 @@ mcp_servers:
 
 ```bash
 claude mcp add universal-web-retrieval \
-  --env PYTHONPATH=/path/to/universal-web-retrieval-mcp/src \
   --env TAVILY_API_KEY="${TAVILY_API_KEY}" \
-  -- python -m universal_web_retrieval
+  -- uvx uwr
 ```
 
 ### Cursor

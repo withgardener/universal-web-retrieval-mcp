@@ -2,6 +2,31 @@
 
 All notable changes to this project. Format: Keep a Changelog; versioning: SemVer.
 
+## Unreleased
+
+### Added
+
+- **npx launcher package `uwr`** (`npm/`): a zero-dependency package that starts
+  the published PyPI server, so npm-only MCP marketplaces can validate it.
+  It resolves a runner in order — `UWR_NPM_RUNNER` override, `uvx`, `uv`,
+  `pipx`, then an auto-downloaded Astral uv whose sha256 is pinned in
+  `npm/lib/uv-pin.json` and verified before unpacking — and caches that uv under
+  `$XDG_CACHE_HOME/uwr-npm/`. `uwr --launcher-info` reports the launcher version,
+  the pinned PyPI version and the resolved runner. Published as `uwr` and as the
+  scoped alias `@withgardener/uwr`.
+- **npm release workflow** (`.github/workflows/release-npm.yml`): on `release:
+  published`, runs the launcher tests, requires tag == `npm/package.json` ==
+  `pyproject` version, then publishes both names with provenance, skipping any
+  version already on the registry.
+- **Version guard** `tests/unit/test_npm_version_sync.py`: the launcher version
+  must equal the project version, and every pinned uv asset needs a sha256.
+- **README Quick Start**: uvx / npx / pip configurations, keyless by default.
+
+### Changed
+
+- README installation routes: `uvx`, `npx` and `pip` are the documented ways to
+  run the server; `PYTHONPATH=src` is now only the from-source development path.
+
 ## 0.2.0 — 2026-10-20
 
 ### Added

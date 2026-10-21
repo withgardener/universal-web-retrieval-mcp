@@ -1,0 +1,84 @@
+name: Release launcher to npm
+
+# Publishes the npx launcher ONLY when a GitHub Release is published (e.g. v0.2.0).
+# Plain pushes, tags and PRs never reach the registry.
+# Auth: NPM_TOKEN repository secret (required for provenance); the token needs
+# read/write on `uwr` and `@withgardener/uwr`. Provenance attestations are
+# generated via OIDC, so the job needs id-token: write.
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    name: Test & publish (provenance)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    environment: npm
+    env:
+      NPM_CONFIG_PROVENANCE: "true"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+
+      - name: Run launcher unit tests
+        run: node --test npm/test/*.test.js
+
+      - name: Verify version agreement (tag == npm/package.json == pyproject)
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME#v}"
+          NPM_VER=$(node -p "require('./npm/package.json').version")
+          PY_VER=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          echo "tag=$TAG npm=$NPM_VER pyproject=$PY_VER"
+          if [ "$TAG" != "$NPM_VER" ]; then
+            echo "::error::release tag '$TAG' does not match npm/package.json version '$NPM_VER'"
+            exit 1
+          fi
+          if [ "$PY_VER" != "$NPM_VER" ]; then
+            echo "::error::pyproject version '$PY_VER' does not match npm/package.json version '$NPM_VER'"
+            exit 1
+          fi
+
+      - name: Publish uwr
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          VER=$(node -p "require('./npm/package.json').version")
+          if npm view "uwr@${VER}" version >/dev/null 2>&1; then
+            echo "::notice::uwr@${VER} is already published — skipping (idempotent re-run)"
+            exit 0
+          fi
+          ( cd npm && npm publish --provenance --access public )
+
+      - name: Publish @withgardener/uwr alias
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          VER=$(node -p "require('./npm/package.json').version")
+          if npm view "@withgardener/uwr@${VER}" version >/dev/null 2>&1; then
+            echo "::notice::@withgardener/uwr@${VER} is already published — skipping (idempotent re-run)"
+            exit 0
+          fi
+          TMP="$(mktemp -d)"
+          cp -R npm/bin npm/lib npm/README.md npm/LICENSE npm/package.json "${TMP}/"
+          node -e '
+            const fs = require("fs");
+            const file = process.argv[1];
+            const pkg = JSON.parse(fs.readFileSync(file, "utf8"));
+            pkg.name = "@withgardener/uwr";
+            fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + "\n");
+          ' "${TMP}/package.json"
+          node -p "require('${TMP}/package.json').name + '@' + require('${TMP}/package.json').version"
+          ( cd "${TMP}" && npm publish --provenance --access public )
