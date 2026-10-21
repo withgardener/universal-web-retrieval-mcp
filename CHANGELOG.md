@@ -2,6 +2,15 @@
 
 All notable changes to this project. Format: Keep a Changelog; versioning: SemVer.
 
+## 0.2.3 — 2026-10-21
+
+### Changed
+
+- **npm releases use Trusted Publishing (OIDC).** `release-npm.yml` no longer reads
+  any npm token; npmjs.com trusts this repository's `release-npm.yml` in the `npm`
+  environment, and the job ensures npm >= 11.5.1. Provenance is unchanged. No code
+  changes in the Python package or the launcher.
+
 ## 0.2.2 — 2026-10-21
 
 ### Changed
