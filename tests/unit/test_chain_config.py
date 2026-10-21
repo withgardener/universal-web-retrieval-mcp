@@ -329,8 +329,9 @@ def test_list_providers_lists_every_known_provider():
 
 
 def test_server_info_version_matches_package_version():
+    from universal_web_retrieval import __version__
     from universal_web_retrieval.server import app
-    assert app.version == "0.2.0"
+    assert app.version == __version__
 
 
 def test_empty_provider_list_is_invalid_on_search_and_fetch_tools(monkeypatch):
