@@ -80,7 +80,12 @@ an `uwr` you installed yourself with `pip install uwr`.
 | `UWR_NPM_RUNNER` | Force `uvx` / `pipx` / `python` / `bundled-uv` |
 | `UWR_NPM_NO_DOWNLOAD=1` | Never download uv; fail with install hints instead |
 | `XDG_CACHE_HOME` | Where the auto-downloaded uv is cached |
-| `NODE_USE_ENV_PROXY=1` | Node ≥ 24 only: make the uv download honour `HTTPS_PROXY` / `NO_PROXY` |
+
+**Proxies:** the uv download uses Node's built-in `https` client, which ignores
+`HTTPS_PROXY` / `NO_PROXY`; `NODE_USE_ENV_PROXY=1` does not change that (verified
+on Node 24.11 — the download still connects directly). Behind a mandatory proxy,
+install `uv`/`pipx` yourself, or `pip install uwr` and set
+`UWR_NPM_RUNNER=python`, instead of relying on the automatic download.
 
 **stdout is reserved for MCP JSON-RPC.** All launcher diagnostics go to stderr,
 so an MCP client can parse the stream without filtering.

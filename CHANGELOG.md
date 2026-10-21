@@ -35,6 +35,14 @@ All notable changes to this project. Format: Keep a Changelog; versioning: SemVe
   and exited 0. It now runs `python -m universal_web_retrieval.cli` — the same
   entry point as the `uwr` console script — so forwarded flags behave as
   documented.
+- **README claimed a proxy switch the downloader never honoured.** The npm README
+  table listed `NODE_USE_ENV_PROXY=1` as making the uv download honour
+  `HTTPS_PROXY` / `NO_PROXY`; the download uses Node's built-in `https` client,
+  which ignores those variables (measured on Node 24.11 with a logging proxy: zero
+  proxied requests). The row is replaced by a note saying the download connects
+  directly and pointing proxy users at `uv`/`pipx`/`UWR_NPM_RUNNER=python`. A new
+  `npm/test/docs.test.js` fails when the README table documents a switch the
+  launcher never reads.
 
 ## 0.2.0 — 2026-10-20
 
