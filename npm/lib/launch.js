@@ -98,13 +98,17 @@ async function run(argv, opts = {}) {
   const stderr = opts.stderr || process.stderr;
   const io = { env, platform, stdout, stderr };
 
-  if (argv.includes(INFO_FLAG)) {
+  // Only a launcher-level flag before any `--`: `uwr -- --launcher-info` is meant for the server.
+  const dashdash = argv.indexOf('--');
+  const launcherArgs = dashdash === -1 ? argv : argv.slice(0, dashdash);
+  if (launcherArgs.includes(INFO_FLAG)) {
     let resolved = 'none';
     try {
       const plan = resolvePlan({ env, platform });
       resolved = plan ? plan.label : 'none';
-    } catch {
+    } catch (err) {
       resolved = 'none';
+      stderr.write(`uwr: ${err.message}\n`);
     }
     stdout.write(
       `${JSON.stringify({

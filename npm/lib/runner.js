@@ -14,7 +14,7 @@ const pkg = require('../package.json');
 const { PIN, uvBinaryName } = require('./platform');
 
 const VERSION = pkg.version;
-const OVERRIDES = ['uvx', 'pipx', 'python', 'bundled-uv'];
+const OVERRIDES = ['uvx', 'uv', 'pipx', 'python', 'bundled-uv'];
 
 function pathSeparator(platform) {
   return platform === 'win32' ? ';' : ':';

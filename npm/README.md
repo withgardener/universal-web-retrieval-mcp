@@ -58,7 +58,7 @@ You can also `npx -y @withgardener/uwr` — same launcher, scoped alias.
 The launcher never bundles Python. It looks for a way to run `uwr==0.2.0` (the
 version is pinned to this package's version) in this order:
 
-1. `UWR_NPM_RUNNER` — force one of `uvx`, `pipx`, `python`, `bundled-uv`.
+1. `UWR_NPM_RUNNER` — force one of `uvx`, `uv`, `pipx`, `python`, `bundled-uv`.
 2. `uvx` on `PATH` → `uvx --from uwr==<version> uwr`
 3. `uv` on `PATH` → `uv tool run --from uwr==<version> uwr`
 4. `pipx` on `PATH` → `pipx run --spec uwr==<version> uwr`
@@ -78,7 +78,7 @@ an `uwr` you installed yourself with `pip install uwr`.
 
 | Variable | Effect |
 |---|---|
-| `UWR_NPM_RUNNER` | Force `uvx` / `pipx` / `python` / `bundled-uv` |
+| `UWR_NPM_RUNNER` | Force `uvx` / `uv` / `pipx` / `python` / `bundled-uv` |
 | `UWR_NPM_NO_DOWNLOAD=1` | Never download uv; fail with install hints instead |
 | `XDG_CACHE_HOME` | Where the auto-downloaded uv is cached |
 
