@@ -57,6 +57,25 @@ function findOnPath(name, opts = {}) {
   return null;
 }
 
+// Real uv builds are tens of megabytes (the pinned tarballs unpack to a ~40 MB binary). Anything
+// far smaller is a half-written download — an interrupted run, a disk-full kill, or a cache left
+// behind by an older launcher that unpacked straight into the cache dir. Those files are still
+// executable, and for a file without ELF/Mach-O magic libuv falls back to `/bin/sh`, which exits 0
+// without doing anything, so a poisoned cache looked like "the MCP server closed immediately".
+const MIN_CACHED_UV_BYTES = 1024 * 1024;
+
+function isUsableUvBinary(file, platform) {
+  try {
+    const st = fs.statSync(file);
+    if (!st.isFile() || st.size < MIN_CACHED_UV_BYTES) return false;
+    if (platform === 'win32') return true;
+    fs.accessSync(file, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // $XDG_CACHE_HOME/uwr-npm/uv-<ver> with the usual per-platform fallbacks.
 function cacheRoot(env = process.env, platform = process.platform) {
   let base;
@@ -68,7 +87,7 @@ function cacheRoot(env = process.env, platform = process.platform) {
 
 function cachedUvPath(env = process.env, platform = process.platform) {
   const bin = path.join(cacheRoot(env, platform), uvBinaryName(platform));
-  return isExecutableFile(bin, platform) ? bin : null;
+  return isUsableUvBinary(bin, platform) ? bin : null;
 }
 
 // Arguments for a given runner, WITHOUT the user's own arguments.
@@ -148,11 +167,13 @@ module.exports = {
   VERSION,
   OVERRIDES,
   PIN,
+  MIN_CACHED_UV_BYTES,
   baseArgs,
   cacheRoot,
   cachedUvPath,
   findOnPath,
   isExecutableFile,
+  isUsableUvBinary,
   resolvePlan,
   pathSeparator,
 };

@@ -12,7 +12,7 @@ const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 
 const { PIN, resolveAsset, uvBinaryName } = require('./platform');
-const { cacheRoot, isExecutableFile } = require('./runner');
+const { cacheRoot, isExecutableFile, isUsableUvBinary } = require('./runner');
 const VERSION = require('../package.json').version;
 
 const REDIRECTS = new Set([301, 302, 303, 307, 308]);
@@ -113,7 +113,13 @@ async function ensureUv(opts = {}) {
   const cacheDir = opts.cacheDir || cacheRoot(env, platform);
   const binary = opts.binaryPath || path.join(cacheDir, uvBinaryName(platform));
 
-  if (!opts.force && isExecutableFile(binary, platform)) return binary;
+  // A cache entry too small to be a real uv is stale rubbish (interrupted download, disk-full kill,
+  // older launcher). Drop it so the verified download can take its place — renaming over an existing
+  // uv.exe fails on Windows, and trusting it made every later launch fail the same way.
+  if (!opts.force) {
+    if (isUsableUvBinary(binary, platform)) return binary;
+    removeQuietly(binary);
+  }
 
   const target = opts.target || resolveAsset(platform, arch);
   if (!target) {

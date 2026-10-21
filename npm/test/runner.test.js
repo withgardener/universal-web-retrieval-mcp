@@ -5,7 +5,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { resolvePlan, VERSION, PIN } = require('../lib/runner');
+const { resolvePlan, cachedUvPath, MIN_CACHED_UV_BYTES, VERSION, PIN } = require('../lib/runner');
 const { baseEnv, makeStubDir, tempDir, REPO_ROOT } = require('./helpers');
 
 const PLATFORM = 'linux';
@@ -45,12 +45,35 @@ test('a uv already present in the launcher cache is reused', () => {
   const cacheDir = path.join(env.XDG_CACHE_HOME, 'uwr-npm', `uv-${PIN.version}`);
   fs.mkdirSync(cacheDir, { recursive: true });
   const binary = path.join(cacheDir, 'uv');
-  fs.writeFileSync(binary, '#!/bin/sh\nexit 0\n');
+  // A real uv is tens of megabytes; pad past the sanity floor the launcher now enforces.
+  fs.writeFileSync(binary, Buffer.alloc(MIN_CACHED_UV_BYTES, 0x20));
   fs.chmodSync(binary, 0o755);
 
   const plan = resolvePlan({ env, platform: PLATFORM });
   assert.strictEqual(plan.runner, 'bundled-uv');
   assert.strictEqual(plan.command, binary);
+});
+
+test('a zero-byte or truncated uv in the cache is not trusted', () => {
+  // Regression: the cache check only tested the executable bit, so a 0-byte or half-written `uv`
+  // (an interrupted download from an older launcher unpacked straight into the cache) was trusted
+  // forever. For a file without ELF magic libuv falls back to /bin/sh, so the launcher ran an empty
+  // shell script: every `npx uwr` printed nothing and exited 0, with no way out but manual deletion.
+  for (const size of [0, 4096, MIN_CACHED_UV_BYTES - 1]) {
+    const env = baseEnv();
+    const cacheDir = path.join(env.XDG_CACHE_HOME, 'uwr-npm', `uv-${PIN.version}`);
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const binary = path.join(cacheDir, 'uv');
+    fs.writeFileSync(binary, Buffer.alloc(size, 0x41));
+    fs.chmodSync(binary, 0o755);
+
+    assert.strictEqual(cachedUvPath(env, PLATFORM), null, `${size}-byte uv must not be trusted`);
+    assert.strictEqual(
+      resolvePlan({ env, platform: PLATFORM }),
+      null,
+      `${size}-byte uv must fall through to a fresh download`
+    );
+  }
 });
 
 test('UWR_NPM_RUNNER=uvx overrides a uv-first PATH', () => {

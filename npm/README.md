@@ -67,7 +67,8 @@ version is pinned to this package's version) in this order:
    against `lib/uv-pin.json` *before* unpacking, and it is cached in
    `$XDG_CACHE_HOME/uwr-npm/uv-<ver>/` (`~/.cache` by default,
    `%LOCALAPPDATA%` on Windows). A hash mismatch aborts and deletes the
-   download.
+   download. A cached copy that is too small to be a real uv (an interrupted
+   download) is discarded and fetched again instead of being trusted.
 6. Otherwise it prints install hints and exits 1.
 
 `python` (`UWR_NPM_RUNNER=python`) runs `python -m universal_web_retrieval.cli`, i.e.

@@ -199,6 +199,38 @@ test('two concurrent first runs both succeed and leave one valid binary', async 
   assert.ok(!fs.existsSync(path.join(cacheDir, stem)));
 });
 
+test('a truncated uv already in the cache is replaced by a verified download', async () => {
+  // Regression: ensureUv returned any executable file it found, so a 0-byte uv from an interrupted
+  // download (older launchers unpacked straight into the cache) was never repaired.
+  const dir = tempDir('uwr-stale-');
+  const cacheDir = path.join(dir, 'cache');
+  const { archive, script } = makeFakeUvArchive(dir);
+  const asset = path.basename(archive);
+  fs.mkdirSync(cacheDir, { recursive: true });
+  const stale = path.join(cacheDir, 'uv');
+  fs.writeFileSync(stale, '');
+  fs.chmodSync(stale, 0o755);
+  const server = await serve({ [`/${asset}`]: { body: fs.readFileSync(archive) } });
+
+  let binary;
+  try {
+    binary = await ensureUv({
+      cacheDir,
+      platform: 'linux',
+      arch: 'x64',
+      env: { XDG_CACHE_HOME: dir },
+      baseUrl: `http://127.0.0.1:${server.port}`,
+      target: { asset, sha256: sha256(archive) },
+    });
+  } finally {
+    await server.close();
+  }
+
+  assert.strictEqual(binary, stale);
+  assert.strictEqual(fs.readFileSync(binary, 'utf8'), script, 'the stale file must be replaced by the download');
+  assert.deepStrictEqual(fs.readdirSync(cacheDir), ['uv'], 'no leftover parts or staging dirs');
+});
+
 test('a failed unpack leaves no partial unpack in the cache', async () => {
   // A sha256 only proves the bytes match the pin; it says nothing about whether the unpack finished.
   // A killed or failing tar must never leave a half-written `uv` that the next run trusts as cached.

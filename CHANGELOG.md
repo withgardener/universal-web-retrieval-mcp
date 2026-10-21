@@ -43,6 +43,14 @@ All notable changes to this project. Format: Keep a Changelog; versioning: SemVe
   directly and pointing proxy users at `uv`/`pipx`/`UWR_NPM_RUNNER=python`. A new
   `npm/test/docs.test.js` fails when the README table documents a switch the
   launcher never reads.
+- **Launcher trusted a truncated `uv` in its cache forever.** The cache check only
+  tested the executable bit, so a 0-byte or half-written `uv` — an interrupted
+  download, a disk-full kill, or damage left by an older launcher that unpacked
+  straight into the cache dir — was reused on every run. Because libuv falls back
+  to `/bin/sh` for a file without ELF/Mach-O magic, `npx uwr` then printed nothing
+  and exited 0 forever. A cached binary smaller than 1 MiB is now treated as stale:
+  it is deleted and re-downloaded (verifying the pin again), and `ensureUv` repairs
+  the cache on the same path.
 
 ## 0.2.0 — 2026-10-20
 
