@@ -29,6 +29,16 @@ All notable changes to this project. Format: Keep a Changelog; versioning: SemVe
 
 ### Fixed
 
+- **`python -m universal_web_retrieval` ignored its arguments.** `__main__.py`
+  started the server directly, so `--version` printed nothing; it now delegates
+  to the same CLI as the `uwr` console script (no flags still starts the server).
+- **Launcher `--launcher-info`**: only honoured before `--` (so
+  `uwr -- --launcher-info` reaches the server), and when nothing resolves the
+  reason (for example an unsupported `UWR_NPM_RUNNER`) is printed on stderr.
+- **Launcher accepts `UWR_NPM_RUNNER=uv`**, matching the automatic order.
+- **npm release waits for PyPI**: the launcher is published only after
+  `uwr==<version>` is visible on PyPI, so `npx uwr` never points at a missing
+  release.
 - **Launcher `python` runner silently dropped every argument.**
   `UWR_NPM_RUNNER=python` ran `python -m universal_web_retrieval`, which starts
   `__main__.py` and ignores `sys.argv`, so `npx -y uwr --version` printed nothing
