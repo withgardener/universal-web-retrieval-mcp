@@ -98,6 +98,13 @@ function extractArchive(archive, destDir, platform) {
   }
 }
 
+// Each run downloads into its own temp names and only renames the finished binary into place, so
+// two launchers starting at the same time cannot corrupt each other's download/unpack, and a killed
+// unpack can never leave a half-written `uv` that the next run would trust as cached.
+function uniqueSuffix() {
+  return `${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
+}
+
 // Download (if needed), verify, unpack and return the absolute path of uv.
 async function ensureUv(opts = {}) {
   const env = opts.env || process.env;
@@ -118,46 +125,52 @@ async function ensureUv(opts = {}) {
   const version = opts.uvVersion || PIN.version;
   const baseUrl = (opts.baseUrl || `https://github.com/astral-sh/uv/releases/download/${version}`).replace(/\/+$/, '');
   const url = `${baseUrl}/${target.asset}`;
-  const part = path.join(cacheDir, `${target.asset}.part`);
+  const id = uniqueSuffix();
+  const part = path.join(cacheDir, `${target.asset}.part-${id}`);
+  const staging = path.join(cacheDir, `unpack-${id}`);
 
   fs.mkdirSync(cacheDir, { recursive: true });
 
-  let actual;
   try {
-    actual = await downloadTo(url, part);
-  } catch (err) {
+    let actual;
+    try {
+      actual = await downloadTo(url, part);
+    } catch (err) {
+      removeQuietly(part);
+      throw err;
+    }
+
+    if (actual !== target.sha256) {
+      throw new Error(
+        `sha256 mismatch for ${target.asset}: expected ${target.sha256}, got ${actual}. ` +
+          'Refusing to unpack the download (file deleted).'
+      );
+    }
+
+    fs.mkdirSync(staging, { recursive: true });
+    extractArchive(part, staging, platform);
+
+    // tarballs nest the binary in `<asset-stem>/`, the Windows zip has it at the archive root.
+    const staged = path.join(staging, uvBinaryName(platform));
+    const nested = path.join(staging, assetStem(target.asset), uvBinaryName(platform));
+    const source = [staged, nested].find((candidate) => fs.existsSync(candidate));
+    if (!source) {
+      throw new Error(`uv archive ${target.asset} did not contain a \`${uvBinaryName(platform)}\` binary.`);
+    }
+    if (platform !== 'win32') fs.chmodSync(source, 0o755);
+
+    try {
+      fs.renameSync(source, binary);
+    } catch (err) {
+      // A concurrent launcher may have won the race and be running the binary; its copy is the same
+      // verified build, so treat that as success instead of failing the second launch.
+      if (!isExecutableFile(binary, platform)) throw err;
+    }
+  } finally {
     removeQuietly(part);
-    throw err;
+    removeQuietly(staging);
   }
 
-  if (actual !== target.sha256) {
-    removeQuietly(part);
-    throw new Error(
-      `sha256 mismatch for ${target.asset}: expected ${target.sha256}, got ${actual}. ` +
-        'Refusing to unpack the download (file deleted).'
-    );
-  }
-
-  try {
-    extractArchive(part, cacheDir, platform);
-  } catch (err) {
-    removeQuietly(part);
-    throw err;
-  }
-
-  const nestedDir = path.join(cacheDir, assetStem(target.asset));
-  const nestedBinary = path.join(nestedDir, uvBinaryName(platform));
-  if (!isExecutableFile(binary, platform) && fs.existsSync(nestedBinary)) {
-    fs.copyFileSync(nestedBinary, binary);
-  }
-  if (!fs.existsSync(binary)) {
-    removeQuietly(part);
-    throw new Error(`uv archive ${target.asset} did not contain a \`${uvBinaryName(platform)}\` binary.`);
-  }
-  if (platform !== 'win32') fs.chmodSync(binary, 0o755);
-
-  removeQuietly(nestedDir);
-  removeQuietly(part);
   return binary;
 }
 
