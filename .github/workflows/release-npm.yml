@@ -49,6 +49,19 @@ jobs:
             exit 1
           fi
 
+      - name: Wait for uwr==<version> on PyPI (the launcher pins it)
+        run: |
+          set -euo pipefail
+          VER=$(node -p "require('./npm/package.json').version")
+          for i in $(seq 1 60); do
+            if curl -fsS -o /dev/null "https://pypi.org/pypi/uwr/${VER}/json"; then
+              echo "uwr ${VER} is on PyPI"; exit 0
+            fi
+            echo "waiting for uwr ${VER} on PyPI (${i}/60)"; sleep 20
+          done
+          echo "::error::uwr ${VER} did not appear on PyPI within 20 minutes; not publishing a launcher that cannot start"
+          exit 1
+
       - name: Publish uwr
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
