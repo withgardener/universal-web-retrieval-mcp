@@ -21,20 +21,29 @@ function quoteWindowsArg(arg) {
   return `"${arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, '$1$1')}"`;
 }
 
-function spawnServer(plan, userArgs, io) {
-  const { env, platform, stderr } = io;
+function buildInvocation(plan, userArgs, platform, env) {
   const args = plan.args.concat(userArgs);
-  let command = plan.command;
-  let spawnArgs = args;
-  let windowsVerbatimArguments = false;
 
   // .cmd/.bat shims (npm/pipx on Windows) cannot be spawned directly by Node.
-  if (platform === 'win32' && /\.(cmd|bat)$/i.test(command)) {
+  if (platform === 'win32' && /\.(cmd|bat)$/i.test(plan.command)) {
     const line = [plan.command].concat(args).map(quoteWindowsArg).join(' ');
-    command = env.ComSpec || 'cmd.exe';
-    spawnArgs = ['/d', '/s', '/c', line];
-    windowsVerbatimArguments = true;
+    return {
+      command: env.ComSpec || 'cmd.exe',
+      // cmd /d /s /c strips exactly one leading and one trailing quote, so a line whose first token
+      // is a quoted path ("C:\Program Files\...\x.cmd") would lose its opening quote and cmd would try
+      // to run "C:\Program". Wrap the whole line in one extra pair (same trick as cross-spawn).
+      args: ['/d', '/s', '/c', `"${line}"`],
+      windowsVerbatimArguments: true,
+    };
   }
+
+  return { command: plan.command, args, windowsVerbatimArguments: false };
+}
+
+function spawnServer(plan, userArgs, io) {
+  const { env, platform, stderr } = io;
+  const invocation = buildInvocation(plan, userArgs, platform, env);
+  const { command, args: spawnArgs, windowsVerbatimArguments } = invocation;
 
   return new Promise((resolve) => {
     let child;
@@ -138,4 +147,4 @@ async function run(argv, opts = {}) {
   return spawnServer(plan, argv, io);
 }
 
-module.exports = { run, spawnServer, quoteWindowsArg, INFO_FLAG, FORWARDED_SIGNALS, PIN };
+module.exports = { run, spawnServer, buildInvocation, quoteWindowsArg, INFO_FLAG, FORWARDED_SIGNALS, PIN };
