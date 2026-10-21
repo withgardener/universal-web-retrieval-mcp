@@ -16,7 +16,7 @@ uvx (zero config, recommended):
 npx (same server, no Python toolchain needed — the launcher fetches a runner):
 
 ```json
-{"mcpServers": {"universal-web-retrieval": {"command": "npx", "args": ["-y", "uwr"]}}}
+{"mcpServers": {"universal-web-retrieval": {"command": "npx", "args": ["-y", "@withgardener/uwr"]}}}
 ```
 
 pip:
@@ -88,7 +88,7 @@ src/universal_web_retrieval/
 ```bash
 pip install uwr                    # from PyPI
 uvx uwr                            # or run without installing
-npx -y uwr                         # or through the npm launcher
+npx -y @withgardener/uwr           # or through the npm launcher
 
 uwr --version                      # uwr 0.2.0
 uwr                                # run the stdio MCP server
@@ -322,7 +322,7 @@ All provider keys below are placeholders or environment-variable references; nev
 }
 ```
 
-Swap `"command": "uvx", "args": ["uwr"]` for `"command": "npx", "args": ["-y", "uwr"]`
+Swap `"command": "uvx", "args": ["uwr"]` for `"command": "npx", "args": ["-y", "@withgardener/uwr"]`
 where npm is the only package manager available, or for
 `"command": "python", "args": ["-m", "universal_web_retrieval"]` when running the
 [from-source](#from-source-development) checkout with `PYTHONPATH` set.

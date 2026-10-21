@@ -1,6 +1,6 @@
 {
-  "name": "uwr",
-  "version": "0.2.1",
+  "name": "@withgardener/uwr",
+  "version": "0.2.2",
   "description": "npx launcher for the UWR (Universal Web Retrieval) MCP server: resilient web search and fetch through a configurable provider chain with automatic failover.",
   "license": "MIT",
   "author": "withgardener",

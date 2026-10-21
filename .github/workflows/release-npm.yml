@@ -2,9 +2,10 @@ name: Release launcher to npm
 
 # Publishes the npx launcher ONLY when a GitHub Release is published (e.g. v0.2.0).
 # Plain pushes, tags and PRs never reach the registry.
-# Auth: NPM_TOKEN repository secret (required for provenance); the token needs
-# read/write on `uwr` and `@withgardener/uwr`. Provenance attestations are
-# generated via OIDC, so the job needs id-token: write.
+# Publishes the scoped package `@withgardener/uwr` only: npm rejects the bare name
+# `uwr` as too similar to existing packages (E403).
+# Auth: NPM_TOKEN secret in the `npm` environment (read/write on @withgardener/uwr).
+# Provenance attestations are generated via OIDC, so the job needs id-token: write.
 
 on:
   release:
@@ -62,36 +63,15 @@ jobs:
           echo "::error::uwr ${VER} did not appear on PyPI within 20 minutes; not publishing a launcher that cannot start"
           exit 1
 
-      - name: Publish uwr
+      - name: Publish @withgardener/uwr
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
+          NAME=$(node -p "require('./npm/package.json').name")
           VER=$(node -p "require('./npm/package.json').version")
-          if npm view "uwr@${VER}" version >/dev/null 2>&1; then
-            echo "::notice::uwr@${VER} is already published — skipping (idempotent re-run)"
+          if npm view "${NAME}@${VER}" version >/dev/null 2>&1; then
+            echo "::notice::${NAME}@${VER} is already published — skipping (idempotent re-run)"
             exit 0
           fi
           ( cd npm && npm publish --provenance --access public )
-
-      - name: Publish @withgardener/uwr alias
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          set -euo pipefail
-          VER=$(node -p "require('./npm/package.json').version")
-          if npm view "@withgardener/uwr@${VER}" version >/dev/null 2>&1; then
-            echo "::notice::@withgardener/uwr@${VER} is already published — skipping (idempotent re-run)"
-            exit 0
-          fi
-          TMP="$(mktemp -d)"
-          cp -R npm/bin npm/lib npm/README.md npm/LICENSE npm/package.json "${TMP}/"
-          node -e '
-            const fs = require("fs");
-            const file = process.argv[1];
-            const pkg = JSON.parse(fs.readFileSync(file, "utf8"));
-            pkg.name = "@withgardener/uwr";
-            fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + "\n");
-          ' "${TMP}/package.json"
-          node -p "require('${TMP}/package.json').name + '@' + require('${TMP}/package.json').version"
-          ( cd "${TMP}" && npm publish --provenance --access public )

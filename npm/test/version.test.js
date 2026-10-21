@@ -15,7 +15,7 @@ test('npm launcher version equals the pyproject version', () => {
 });
 
 test('launcher manifest is zero-dependency and npx-friendly', () => {
-  assert.strictEqual(pkg.name, 'uwr');
+  assert.strictEqual(pkg.name, '@withgardener/uwr');
   assert.deepStrictEqual(pkg.bin, { uwr: 'bin/uwr.js' });
   assert.strictEqual(pkg.dependencies, undefined);
   assert.strictEqual(pkg.devDependencies, undefined);

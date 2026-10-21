@@ -2,6 +2,15 @@
 
 All notable changes to this project. Format: Keep a Changelog; versioning: SemVer.
 
+## 0.2.2 — 2026-10-21
+
+### Changed
+
+- **The npm launcher is published as `@withgardener/uwr` only.** The npm registry
+  rejected the bare name `uwr` ("too similar to existing packages", E403), so
+  0.2.1 never reached npm. Use `npx -y @withgardener/uwr`; the PyPI package is
+  still `uwr` (`uvx uwr`). No Python code changes.
+
 ## 0.2.1 — 2026-10-21
 
 ### Added
@@ -12,12 +21,12 @@ All notable changes to this project. Format: Keep a Changelog; versioning: SemVe
   `pipx`, then an auto-downloaded Astral uv whose sha256 is pinned in
   `npm/lib/uv-pin.json` and verified before unpacking — and caches that uv under
   `$XDG_CACHE_HOME/uwr-npm/`. `uwr --launcher-info` reports the launcher version,
-  the pinned PyPI version and the resolved runner. Published as `uwr` and as the
-  scoped alias `@withgardener/uwr`.
+  the pinned PyPI version and the resolved runner. Published as
+  `@withgardener/uwr`.
 - **npm release workflow** (`.github/workflows/release-npm.yml`): on `release:
   published`, runs the launcher tests, requires tag == `npm/package.json` ==
-  `pyproject` version, then publishes both names with provenance, skipping any
-  version already on the registry.
+  `pyproject` version, waits for that version on PyPI, then publishes
+  `@withgardener/uwr` with provenance, skipping a version already on the registry.
 - **Version guard** `tests/unit/test_npm_version_sync.py`: the launcher version
   must equal the project version, and every pinned uv asset needs a sha256.
 - **README Quick Start**: uvx / npx / pip configurations, keyless by default.

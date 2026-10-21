@@ -48,7 +48,7 @@ def test_uv_pin_has_sha256_for_every_supported_asset() -> None:
 
 def test_npm_launcher_is_dependency_free_and_declares_expected_files() -> None:
     pkg = _npm_package()
-    assert pkg["name"] == "uwr"
+    assert pkg["name"] == "@withgardener/uwr"
     assert pkg["bin"] == {"uwr": "bin/uwr.js"}
     assert "dependencies" not in pkg and "devDependencies" not in pkg
     assert pkg["license"] == "MIT"

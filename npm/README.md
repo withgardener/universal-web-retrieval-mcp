@@ -1,6 +1,6 @@
 # uwr — npx launcher
 
-`npx -y uwr` starts [Universal Web Retrieval MCP](https://github.com/withgardener/universal-web-retrieval-mcp),
+`npx -y @withgardener/uwr` starts [Universal Web Retrieval MCP](https://github.com/withgardener/universal-web-retrieval-mcp),
 a stdio MCP server that gives any agent resilient web search and page fetching
 through a configurable provider chain (AnySearch → Tavily → DDGS by default,
 plus Yuanbao, Bocha, DeepSeek, Kimi, Zhipu, Brave and Jina Reader on request)
@@ -18,7 +18,7 @@ implementation to trust and one version to update.
   "mcpServers": {
     "universal-web-retrieval": {
       "command": "npx",
-      "args": ["-y", "uwr"]
+      "args": ["-y", "@withgardener/uwr"]
     }
   }
 }
@@ -34,7 +34,7 @@ Keys are optional environment variables; add only the ones you have:
   "mcpServers": {
     "universal-web-retrieval": {
       "command": "npx",
-      "args": ["-y", "uwr"],
+      "args": ["-y", "@withgardener/uwr"],
       "env": {
         "TAVILY_API_KEY": "tvly-...",
         "ANYSEARCH_API_KEY": "..."
@@ -51,7 +51,7 @@ for the full table): `ANYSEARCH_API_KEY`, `TAVILY_API_KEY`, `YUANBAO_API_KEY`,
 `UWR_SEARCH_CHAIN`, `UWR_FETCH_CHAIN`, `UWR_DISABLED_PROVIDERS` and
 `WEB_RETRIEVAL_TIMEOUT`.
 
-You can also `npx -y @withgardener/uwr` — same launcher, scoped alias.
+The npm registry refuses the unscoped name `uwr` (too similar to existing packages), so the launcher is published only under the `@withgardener` scope. The Python package on PyPI is still plain `uwr` (`uvx uwr`).
 
 ## How the runner is resolved
 
@@ -94,13 +94,13 @@ so an MCP client can parse the stream without filtering.
 ## Diagnose
 
 ```bash
-npx -y uwr --launcher-info
+npx -y @withgardener/uwr --launcher-info
 # {"launcher_version":"0.2.0","pinned_pypi_version":"0.2.0","runner_resolved":"uvx"}
 ```
 
 This prints the launcher version, the pinned PyPI version and the runner it
 would use, without starting the server. Every other argument is forwarded
-untouched to `uwr` (`npx -y uwr --version` → `uwr 0.2.0`).
+untouched to `uwr` (`npx -y @withgardener/uwr --version` → `uwr <version>`).
 
 ## Prefer uvx directly?
 
