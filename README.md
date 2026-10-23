@@ -54,6 +54,7 @@ Agent (any MCP client)
 - **Configurable chains** — `UWR_SEARCH_CHAIN` / `UWR_FETCH_CHAIN` set the order; `UWR_DISABLED_PROVIDERS` switches providers off without editing the chains.
 - **Per-call override** — `web_search(..., providers=["bocha"])` or `["yuanbao","tavily"]` runs just that order for one call.
 - **Automatic provider failover** — one provider failing never fails the tool.
+- **Opt-in fan-out** — `mode="fanout"` queries up to N providers concurrently and rank-fuses the answers (RRF) instead of taking the first one. See [Search modes](#search-modes).
 - **Auto keyed/keyless** — key configured → official keyed API; key absent → official keyless access (where the provider offers one). Keyed-only providers (Yuanbao, Bocha, DeepSeek, Kimi, Zhipu, Brave) without a key are *skipped*, never attempted, so a missing key cannot 401 the chain.
 - **Strict official APIs** — every provider is called through its official documented endpoint and auth mechanism. No scraping hacks, no undocumented endpoints.
 - **Error classification** — rate limits / outages fall over; invalid credentials fail loudly (ERROR log) and move to the next provider; malformed input never triggers fallback.
@@ -68,9 +69,10 @@ src/universal_web_retrieval/
 ├── server.py            # MCP tool surface (web_search / web_fetch / list_providers)
 ├── config.py            # env-driven settings, call-time key + chain reads
 ├── errors.py            # ProviderError classification, result models, Provider ABC
+├── fanout.py            # URL dedupe + Reciprocal Rank Fusion merge (fan-out mode)
 └── providers/
     ├── registry.py      # name -> provider instance; capability lookup
-    ├── router.py        # chain resolution (env / override / default) + failover
+    ├── router.py        # chain resolution (env / override / default) + failover + fan-out
     ├── anysearch.py     # AnySearch (keyed Bearer / keyless no-auth-header)
     ├── tavily.py        # Tavily (keyed Bearer / keyless X-Tavily-Access-Mode)
     ├── ddgs.py          # DDGS (official package; text + extract)
@@ -90,7 +92,7 @@ pip install uwr                    # from PyPI
 uvx uwr                            # or run without installing
 npx -y @withgardener/uwr           # or through the npm launcher
 
-uwr --version                      # uwr 0.2.0
+uwr --version                      # uwr 0.3.0
 uwr                                # run the stdio MCP server
 ```
 
@@ -115,6 +117,9 @@ uwr                                # or: PYTHONPATH=src python -m universal_web_
 | `UWR_SEARCH_CHAIN` | `anysearch,tavily,ddgs` | Ordered search chain, e.g. `anysearch,tavily,yuanbao,bocha,ddgs` |
 | `UWR_FETCH_CHAIN` | `anysearch,tavily,ddgs` | Ordered fetch chain (search-only providers are dropped) |
 | `UWR_DISABLED_PROVIDERS` | *(empty)* | Names switched off everywhere, e.g. `bocha,deepseek` |
+| `UWR_SEARCH_MODE` | `failover` | `failover` (first success wins) or `fanout` (query N providers, merge). Unknown values warn once and use `failover` |
+| `UWR_SEARCH_FANOUT` | `3` | Max providers queried concurrently in fan-out mode (≥ 1, clamped to the chain length) |
+| `UWR_FANOUT_GRACE` | `5` | Seconds to wait for stragglers after the first fan-out answer; `0` waits for all (still deadline-bounded) |
 
 Resolution rules:
 
@@ -165,7 +170,7 @@ Every key is read **at call time**, so a restart of the MCP server process is en
 
 ## Tools
 
-### `web_search(query, limit=5, providers=None)`
+### `web_search(query, limit=5, providers=None, mode=None)`
 
 ```json
 {
@@ -180,6 +185,20 @@ Every key is read **at call time**, so a restart of the MCP server process is en
 
 When a provider exposes publication date / site (Yuanbao, Bocha, DeepSeek, Kimi, Zhipu, Brave), the result rows also carry `published`, `site` and (where scored) `score`. `provider` / `mode` / `latency_ms` / `attempts` are diagnostic metadata — consumers only need `results`.
 
+`mode` selects the search mode for this call (`"failover"` or `"fanout"`, see [Search modes](#search-modes)); omit it to use `UWR_SEARCH_MODE`. In fan-out mode `provider` is `"fanout"`, `mode` is the shared auth mode of the answering providers (or `"mixed"`), `attempts` entries for successful providers also carry `results` and `latency_ms`, and every result row carries `sources` (provider names in chain order):
+
+```json
+{
+  "success": true, "provider": "fanout", "mode": "keyed", "latency_ms": 812,
+  "attempts": [
+    {"provider": "bocha", "outcome": "ok", "results": 5, "latency_ms": 640},
+    {"provider": "tavily", "outcome": "ok", "results": 5, "latency_ms": 790},
+    {"provider": "ddgs", "outcome": "skipped:grace"}
+  ],
+  "results": [{"title": "...", "url": "...", "snippet": "...", "sources": ["bocha", "tavily"]}]
+}
+```
+
 `attempts` is the per-provider outcome trail in chain order:
 
 | Outcome | Meaning |
@@ -188,6 +207,7 @@ When a provider exposes publication date / site (Yuanbao, Bocha, DeepSeek, Kimi,
 | `error:<msg>` | Attempted and failed; the chain moved on |
 | `skipped:not_configured` | Keyed-only provider without a key — never called |
 | `skipped:deadline` | Fewer than 100 ms remain before the chain deadline, so no call starts |
+| `skipped:grace` | *(fan-out only)* Still running when the grace window after the first answer closed; its result is discarded |
 
 **Success schema (search):** `{"success": true, "provider": ..., "mode": ..., "latency_ms": ..., "attempts": [...], "results": [...]}`. **Provider error schema:** `{"success": false, "error": "...", "attempts": [...]}`. **Invalid-input schema:** `{"success": false, "error": "invalid input: ..."}` (no `attempts`). Fetch returns one object per URL with `url`, `content`, `content_type`, `title`, `provider`, `mode`, `latency_ms`, and `attempts`; failed URLs carry `error` and `attempts` instead of success metadata.
 
@@ -235,12 +255,14 @@ Failed URLs carry an `error` field instead of `content`. Content is Markdown/cle
 
 ### `list_providers()`
 
-Returns every provider this build knows, with capability, configuration status, enabled flag and its 1-based position in each active chain. Key values are never returned.
+Returns every provider this build knows, with capability, configuration status, enabled flag and its 1-based position in each active chain, plus the active `search_mode` and the fan-out settings (`fanout.n`, `fanout.grace_s`). Key values are never returned.
 
 ```json
 {
   "chains": {"search": ["anysearch", "tavily", "ddgs"], "fetch": ["anysearch", "tavily", "ddgs"]},
   "defaults": {"search": ["anysearch", "tavily", "ddgs"], "fetch": ["anysearch", "tavily", "ddgs"]},
+  "search_mode": "failover",
+  "fanout": {"n": 3, "grace_s": 5.0},
   "disabled": [],
   "providers": [
     {"name": "bocha", "kind": "search", "capabilities": ["search"], "keyed_only": true,
@@ -278,6 +300,71 @@ Every one of those links is either free or priced per call (see the table below)
 
 - **Keep `ddgs` last** — keyless, no quota, the floor of the chain.
 - **Never put `jina` in a default chain** — it works without a key, so a stale/keyless deployment would start sending every fetch through it. Add it explicitly when you want its Markdown quality, e.g. `UWR_FETCH_CHAIN: anysearch,tavily,jina,ddgs`.
+
+## Search modes
+
+`web_search` has two modes. The default is unchanged from every earlier release.
+
+| Mode | Behaviour | Cost per search |
+|---|---|---|
+| `failover` (default) | Walks the chain in order; the first provider that returns results wins | one provider call |
+| `fanout` | Queries the first N eligible providers **concurrently**, waits `UWR_FANOUT_GRACE` seconds for stragglers once the first one answers, then merges and rank-fuses everything that arrived | N provider calls |
+
+The trade-off: fan-out spends **N× provider quota per search**, and its latency is
+bounded by the grace window (at most `UWR_FANOUT_GRACE` seconds more than the
+fastest provider) and by the shared chain deadline (`WEB_RETRIEVAL_TIMEOUT`) —
+never by the slowest provider. In exchange it buys agreement: a page several
+providers return outranks a page only one of them found, which is what you want
+when a wrong first hit is expensive.
+
+Selecting a mode:
+
+- `UWR_SEARCH_MODE=fanout` (or `failover`) sets the default for every call.
+  An unknown value logs one warning and falls back to `failover`.
+- `web_search(..., mode="fanout")` overrides the default for one call. An unknown
+  per-call value is an input error — it never silently switches modes.
+- In fan-out mode `providers` still defines the candidate order; its first N
+  **eligible** entries are queried. Keyed-only providers without a key are
+  recorded as `skipped:not_configured` and do **not** consume a slot.
+- `UWR_SEARCH_FANOUT` (default `3`, minimum `1`, clamped to the chain length) sets N.
+
+Merging (`fanout.py`):
+
+1. URLs are normalised for dedupe — scheme and host lower-cased, a leading `www.`
+   stripped, the fragment and tracking parameters (`utm_*`, `gclid`, `fbclid`,
+   `mc_cid`, `mc_eid`, `ref`, `ref_src`, `spm`) dropped, remaining parameters
+   sorted, and a trailing `/` removed. The output keeps a real URL, not the key.
+2. Reciprocal Rank Fusion: `score = Σ 1/(60 + rank)` over every provider that
+   returned the URL, with a 1-based rank inside that provider's list. Ties break
+   on number of sources, then best single rank, then chain order.
+3. Per row: title and URL from the best-ranked occurrence, the longest non-empty
+   snippet, and `published` / `site` from the first non-empty value in chain
+   order. Every row gains `sources` — the provider names, in chain order.
+
+Fan-out responses set `provider: "fanout"` and `mode` to the shared auth mode of
+the answering providers, or `"mixed"` when they differ. `attempts` carries one
+entry per queried provider: `ok` (plus `results` and `latency_ms`),
+`error:<msg>`, `skipped:not_configured`, `skipped:grace` (still running when the
+grace window closed — its result is discarded) or `skipped:deadline`. If every
+provider fails, the error is the same `all providers failed: ...` with the trail
+attached, and one provider's `fallback_eligible=False` error does not abort the
+others.
+
+```json
+{"query": "rust async runtime", "mode": "fanout",
+ "providers": ["bocha", "tavily", "ddgs"]}
+```
+
+`web_fetch` is always failover: there is nothing to merge for a single URL.
+
+Concurrency: providers are synchronous HTTP clients, so fan-out runs one thread
+per provider (`concurrent.futures.ThreadPoolExecutor`) — no new dependency. Each
+worker gets its own timeout budget and shares no mutable per-call state. Yuanbao
+is the only provider holding per-instance state (MCP session id and JSON-RPC
+counter); both are guarded by an `RLock`, and a concurrent handshake race costs
+one extra session, not correctness. A straggler that outlives the grace window
+keeps running in the background; the collector never blocks on it
+(`shutdown(wait=False, cancel_futures=True)`) and its result is dropped.
 
 ## Provider behavior
 

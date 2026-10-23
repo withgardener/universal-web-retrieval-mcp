@@ -1,5 +1,16 @@
 """Provider router: capability -> ordered, configurable provider chain.
 
+Two search modes
+----------------
+``failover`` (default, unchanged since 0.1.x) walks the chain one provider at a
+time and returns the first success. ``fanout`` (opt-in, ``UWR_SEARCH_MODE=fanout``
+or ``mode="fanout"`` on one call) queries up to ``UWR_SEARCH_FANOUT`` providers
+concurrently, waits ``UWR_FANOUT_GRACE`` seconds for stragglers once the first
+one answers, and merges what came back with Reciprocal Rank Fusion
+(``fanout.py``). Fan-out trades N× provider quota per search for quality;
+failover keeps the per-call cost at one provider. ``web_fetch`` is always
+failover.
+
 Chain resolution order
 ----------------------
 1. Per-call ``providers`` (MCP tool argument) — overrides the order for one call.
@@ -29,17 +40,73 @@ from __future__ import annotations
 
 import logging
 import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .. import config
-from ..errors import (Capability, InvalidInputError, Provider, ProviderError,
+from ..errors import (AuthMode, Capability, InvalidInputError, Provider, ProviderError,
                       SearchResult, FetchResult)
+from ..fanout import merge_results
 from . import registry as _registry
 
 log = logging.getLogger("universal_web_retrieval.router")
 
 # (capability, source, dropped) signatures already warned about — one log per chain.
 _WARNED: set = set()
+
+FANOUT_PROVIDER_NAME = "fanout"
+
+
+def _ms(started: float) -> int:
+    return int((time.monotonic() - started) * 1000)
+
+
+def _mode_name(mode: Any) -> str:
+    """AuthMode.value for real enums, ``str`` for anything a test injected."""
+    return getattr(mode, "value", None) or str(mode)
+
+
+def _search_mode(mode: Optional[str]) -> str:
+    """Resolve the mode for one search: per-call argument, then UWR_SEARCH_MODE.
+
+    A per-call value that is not a known mode is an input error (like an
+    unusable ``providers`` override) rather than a silent fallback.
+    """
+    if mode is None:
+        return config.search_mode()
+    value = str(mode).strip().lower()
+    if value not in config.SEARCH_MODES:
+        raise InvalidInputError(
+            f"mode must be one of {', '.join(config.SEARCH_MODES)}")
+    return value
+
+
+def _fanout_call(provider: Provider, query: str, limit: int,
+                 budget: float) -> Dict[str, Any]:
+    """Run ONE provider search inside a worker thread. Never raises.
+
+    Each call gets its own ``timeout_override`` and touches no router state, so
+    concurrent providers cannot interfere with one another. Providers that keep
+    per-instance state (Yuanbao's MCP session id / JSON-RPC counter) guard it
+    with their own lock and stay correct under concurrent calls.
+    """
+    started = time.monotonic()
+    try:
+        result = provider.search(query, limit, timeout_override=budget)
+    except ProviderError as exc:
+        return {"outcome": "error", "error": str(exc),
+                "auth_failure": bool(getattr(exc, "auth_failure", False)),
+                "mode": provider.mode(), "latency_ms": _ms(started),
+                "finished_at": time.monotonic()}
+    except Exception as exc:  # noqa: BLE001 — one provider's surprise is not the chain's
+        return {"outcome": "error", "error": str(exc), "auth_failure": False,
+                "mode": provider.mode(), "latency_ms": _ms(started),
+                "finished_at": time.monotonic()}
+    hits = list(getattr(result, "results", None) or [])
+    return {"outcome": "ok", "result": result, "results": len(hits),
+            "mode": getattr(result, "mode", None) or provider.mode(),
+            "latency_ms": _ms(started), "finished_at": time.monotonic()}
+
 
 
 class ProviderRouter:
@@ -127,9 +194,12 @@ class ProviderRouter:
 
     # ---- capabilities --------------------------------------------------
     def search(self, query: str, limit: int, *, deadline: Optional[float] = None,
-               providers: Optional[Sequence[str]] = None) -> SearchResult:
+               providers: Optional[Sequence[str]] = None,
+               mode: Optional[str] = None) -> SearchResult:
         if not query or not query.strip():
             raise InvalidInputError("query must be a non-empty string")
+        if _search_mode(mode) == "fanout":
+            return self._fanout(query, limit, deadline=deadline, providers=providers)
         return self._walk(Capability.SEARCH, query=query, limit=limit,
                           deadline=deadline, providers=providers)
 
@@ -192,6 +262,163 @@ class ProviderRouter:
                 attempts.append({"provider": name, "outcome": f"error:{str(exc)[:150]}"})
                 errors.append(f"{name}: {str(exc)[:150]}")
         raise _with_attempts("all providers failed: " + " | ".join(errors), attempts)
+
+    # ---- fan-out -------------------------------------------------------
+    def _fanout(self, query: str, limit: int, *, deadline: Optional[float],
+                providers: Optional[Sequence[str]]) -> SearchResult:
+        """Query up to N eligible providers concurrently, merge with RRF.
+
+        Bound by ONE deadline: every worker gets ``remaining`` as its timeout
+        override, the collector stops waiting ``grace`` seconds after the first
+        non-empty answer (``grace == 0`` waits for everyone), and a worker still
+        running thereafter is recorded as ``skipped:grace`` / ``skipped:deadline``
+        while its eventual result is discarded.
+        """
+        chain = self.chain(Capability.SEARCH, providers)   # may raise InvalidInputError
+        if deadline is None:
+            deadline = time.monotonic() + config.chain_deadline()
+        started = time.monotonic()
+        grace = config.fanout_grace()
+        slots = config.fanout_providers()
+
+        # Plan in chain order. not_configured providers are recorded in attempts
+        # but never consume a slot, so they cannot hide a usable provider behind
+        # the N cutoff.
+        layout: List[Tuple[str, Provider]] = []
+        planned: List[Provider] = []
+        for provider in chain:
+            if getattr(provider, "KEYED_ONLY", False) is True and not provider.api_key():
+                layout.append(("skipped", provider))
+                continue
+            if len(planned) >= slots:
+                break
+            layout.append(("run", provider))
+            planned.append(provider)
+
+        records: Dict[str, Dict[str, Any]] = {}
+
+        def _attempts() -> List[Dict[str, Any]]:
+            """Per-provider trail, one entry each, in chain order."""
+            out: List[Dict[str, Any]] = []
+            for kind, provider in layout:
+                name = provider.NAME
+                if kind == "skipped":
+                    out.append({"provider": name, "outcome": "skipped:not_configured"})
+                    continue
+                record = records.get(name)
+                if record is None:
+                    continue          # beyond the N cutoff: never queried, no entry
+                if record["outcome"] == "ok":
+                    out.append({"provider": name, "outcome": "ok",
+                                "results": record["results"],
+                                "latency_ms": record["latency_ms"]})
+                elif record["outcome"].startswith("skipped:"):
+                    out.append({"provider": name, "outcome": record["outcome"]})
+                else:
+                    out.append({"provider": name,
+                                "outcome": f"error:{record['error'][:150]}"})
+            return out
+
+        def _failure_message() -> str:
+            errors: List[str] = []
+            for kind, provider in layout:
+                name = provider.NAME
+                if kind == "skipped":
+                    errors.append(f"{name}: skipped (not_configured)")
+                    continue
+                record = records.get(name)
+                if record is None:
+                    continue
+                if record["outcome"] == "ok":
+                    if not record["results"]:
+                        errors.append(f"{name}: no results")
+                elif record["outcome"] == "skipped:grace":
+                    errors.append(f"{name}: skipped (grace elapsed before it answered)")
+                elif record["outcome"] == "skipped:deadline":
+                    errors.append(f"chain deadline ({config.chain_deadline():.0f}s) "
+                                  f"reached before {name}")
+                else:
+                    errors.append(f"{name}({_mode_name(record['mode'])}): "
+                                  f"{record['error'][:150]}")
+            return "all providers failed: " + " | ".join(errors)
+
+        # Nothing can run: no eligible provider, or the deadline already passed.
+        if not planned:
+            raise _with_attempts(_failure_message(), _attempts())
+        if deadline - time.monotonic() < 0.1:
+            for provider in planned:
+                records[provider.NAME] = {"outcome": "skipped:deadline"}
+            raise _with_attempts(_failure_message(), _attempts())
+
+        futures: Dict[Any, Provider] = {}
+        first_ok_at: Optional[float] = None
+        executor = ThreadPoolExecutor(max_workers=max(1, len(planned)),
+                                      thread_name_prefix="uwr-fanout")
+        try:
+            for provider in planned:
+                budget = max(0.05, deadline - time.monotonic())
+                futures[executor.submit(_fanout_call, provider, query, limit, budget)] = provider
+
+            pending = set(futures)
+            while pending:
+                now = time.monotonic()
+                if first_ok_at is None or grace <= 0:
+                    budget = deadline - now           # nothing to merge yet (or grace=0)
+                else:
+                    budget = min(deadline, first_ok_at + grace) - now
+                if budget <= 0:
+                    break
+                done, pending = wait(pending, timeout=budget,
+                                     return_when=FIRST_COMPLETED)
+                for future in done:
+                    provider = futures[future]
+                    record = future.result()          # _fanout_call never raises
+                    records[provider.NAME] = record
+                    if record["outcome"] == "ok" and record["results"]:
+                        finished = record["finished_at"]
+                        if first_ok_at is None or finished < first_ok_at:
+                            first_ok_at = finished
+                if not done:
+                    break
+        finally:
+            # Never block on a straggler: it may finish in the background, and
+            # whatever it returns is discarded.
+            executor.shutdown(wait=False, cancel_futures=True)
+
+        for provider in planned:
+            if provider.NAME not in records:
+                records[provider.NAME] = {
+                    "outcome": ("skipped:grace" if first_ok_at is not None
+                                else "skipped:deadline")}
+
+        for provider in planned:
+            record = records.get(provider.NAME) or {}
+            if record.get("auth_failure"):
+                # Loud, non-suppressible: the user's key is misconfigured.
+                log.error("AUTH FAILURE on %s (mode=%s): %s — check the configured API key",
+                          provider.NAME, _mode_name(record.get("mode")),
+                          str(record.get("error", ""))[:200])
+
+        contributors = [(provider.NAME, records[provider.NAME]["result"].results,
+                         records[provider.NAME]["mode"])
+                        for provider in planned
+                        if records.get(provider.NAME, {}).get("outcome") == "ok"
+                        and records[provider.NAME]["results"]]
+        if not contributors:
+            raise _with_attempts(_failure_message(), _attempts())
+
+        rows = merge_results([(name, hits) for name, hits, _mode in contributors], limit)
+
+        # One auth mode if the answering providers agree, otherwise "mixed".
+        mode_names = sorted({_mode_name(mode) for _name, _hits, mode in contributors})
+        if len(mode_names) > 1:
+            result_mode = AuthMode.MIXED
+        else:
+            first_mode = contributors[0][2]
+            result_mode = first_mode if isinstance(first_mode, AuthMode) else AuthMode(first_mode)
+
+        return SearchResult(results=rows, provider=FANOUT_PROVIDER_NAME, mode=result_mode,
+                            latency_ms=_ms(started), attempts=_attempts())
 
 
 def _with_attempts(message: str, attempts: List[Dict[str, str]]) -> ProviderError:

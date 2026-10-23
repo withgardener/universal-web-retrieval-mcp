@@ -10,8 +10,11 @@ server process restarts — without any code change.
 """
 from __future__ import annotations
 
+import logging
 import os
 from typing import List
+
+log = logging.getLogger("universal_web_retrieval.config")
 
 # Default chains. v0.1.x hard-coded exactly these; they stay the default so an
 # existing deployment behaves identically after upgrading to 0.2.x.
@@ -238,3 +241,46 @@ def fetch_chain() -> List[str]:
 def disabled_providers() -> frozenset:
     """``UWR_DISABLED_PROVIDERS`` — names switched off without editing chains."""
     return frozenset(_csv_env("UWR_DISABLED_PROVIDERS"))
+
+
+# ---- search modes (v0.3.0) ------------------------------------------------
+SEARCH_MODES: tuple = ("failover", "fanout")
+DEFAULT_SEARCH_MODE = "failover"
+DEFAULT_FANOUT_PROVIDERS = 3
+DEFAULT_FANOUT_GRACE = 5.0
+
+# Unknown mode values already reported — one warning per distinct value, so a
+# typo in the MCP env does not spam every search.
+_WARNED_MODES: set = set()
+
+
+def search_mode() -> str:
+    """``UWR_SEARCH_MODE``: ``failover`` (default) or ``fanout``.
+
+    Anything unrecognised is reported once and treated as ``failover`` — the
+    ordered, single-provider-at-a-time walk that every earlier release shipped.
+    """
+    value = (os.environ.get("UWR_SEARCH_MODE") or "").strip().lower()
+    if not value:
+        return DEFAULT_SEARCH_MODE
+    if value in SEARCH_MODES:
+        return value
+    if value not in _WARNED_MODES:
+        _WARNED_MODES.add(value)
+        log.warning("UWR_SEARCH_MODE=%r is not one of %s — using %s",
+                    value, ", ".join(SEARCH_MODES), DEFAULT_SEARCH_MODE)
+    return DEFAULT_SEARCH_MODE
+
+
+def fanout_providers() -> int:
+    """``UWR_SEARCH_FANOUT``: how many providers fan-out queries at once (>= 1)."""
+    return max(1, _int_env("UWR_SEARCH_FANOUT", DEFAULT_FANOUT_PROVIDERS))
+
+
+def fanout_grace() -> float:
+    """``UWR_FANOUT_GRACE``: seconds to wait for stragglers once one has answered.
+
+    ``0`` means "wait for every provider", still bounded by ``chain_deadline()``.
+    """
+    return max(0.0, _float_env("UWR_FANOUT_GRACE", DEFAULT_FANOUT_GRACE))
+

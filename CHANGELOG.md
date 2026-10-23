@@ -2,6 +2,55 @@
 
 All notable changes to this project. Format: Keep a Changelog; versioning: SemVer.
 
+## 0.3.0 — 2026-10-23
+
+### Added
+
+- **Fan-out search mode (opt-in).** `web_search` can now query up to N providers
+  concurrently and merge what came back, instead of stopping at the first
+  success. Select it per call with `mode="fanout"` or for the whole process with
+  `UWR_SEARCH_MODE=fanout`; `UWR_SEARCH_FANOUT` (default `3`, clamped to the
+  chain length) sets how many eligible providers run at once, and
+  `UWR_FANOUT_GRACE` (default `5` s, `0` = wait for all) bounds how long the
+  collector waits for stragglers after the first non-empty answer. The overall
+  bound is still the shared chain deadline, and each provider gets the remaining
+  budget as its timeout. Failover remains the default and its behaviour is
+  unchanged.
+- **Merge layer** (`fanout.py`): URL normalisation for dedupe (lower-cased
+  scheme/host, leading `www.` stripped, fragment and tracking parameters
+  dropped, remaining parameters sorted, trailing slash removed), Reciprocal Rank
+  Fusion scoring (`k = 60`) with source-count / best-rank / chain-order
+  tie-breaks, per-row title and URL from the best-ranked occurrence, longest
+  non-empty snippet, first non-empty `published`/`site` in chain order, and a
+  `sources` list in chain order.
+- **Fan-out observability**: results report `provider: "fanout"` and a `mode` of
+  `keyed`/`keyless`/`mixed` (new `AuthMode.MIXED`), `attempts` carries one entry
+  per queried provider with `ok` + `results`/`latency_ms`, `error:<msg>`,
+  `skipped:not_configured`, `skipped:grace` or `skipped:deadline`, and
+  `list_providers` reports `search_mode` plus `fanout: {n, grace_s}`.
+- **Tests** (`tests/unit/test_fanout.py`, 43 cases, no network): mode selection
+  from env and per call, invalid values, N clamping, `not_configured` skipping
+  that does not consume a slot, real concurrency with sleeping stubs, grace
+  cut-off, deadline enforcement, one provider failing while others succeed, all
+  failing with the attempt trail attached, `fallback_eligible=False` isolation,
+  URL-variant dedupe, RRF ordering and every tie-break, snippet/title/extra-field
+  merging, `sources`, mixed mode, `list_providers`, and `web_fetch` staying
+  failover.
+
+### Changed
+
+- `AuthMode` gains `MIXED`. `SearchResult.to_dict()` emits `sources` only for rows
+  that carry it, so failover payloads are byte-for-byte identical to 0.2.3.
+- `web_search` takes an optional `mode` argument; `web_fetch` does not and is
+  always failover. README documents both modes with their quota/latency
+  trade-off.
+- Thread safety reviewed for fan-out: providers are sync HTTP clients run one per
+  thread; no provider keeps unsynchronised per-call state. Yuanbao's per-instance
+  MCP session id and JSON-RPC counter are guarded by an `RLock`, and a concurrent
+  handshake race costs an extra session rather than correctness. A straggler is
+  never joined (`shutdown(wait=False, cancel_futures=True)`) and its result is
+  discarded.
+
 ## 0.2.3 — 2026-10-21
 
 ### Changed

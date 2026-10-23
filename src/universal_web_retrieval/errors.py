@@ -15,6 +15,9 @@ class Capability(Enum):
 class AuthMode(Enum):
     KEYED = "keyed"
     KEYLESS = "keyless"
+    # Only produced by fan-out mode, when the providers that answered used
+    # different auth modes. Failover never returns it.
+    MIXED = "mixed"
 
 
 class ProviderError(Exception):
@@ -98,6 +101,10 @@ class SearchResult:
             for key in _SEARCH_EXTRA_FIELDS:
                 if r.get(key) not in (None, ""):
                     row[key] = r[key]
+            # Fan-out rows carry the contributing providers. Failover rows never
+            # set this key, so their payload stays byte-for-byte unchanged.
+            if r.get("sources"):
+                row["sources"] = list(r["sources"])
             rows.append(row)
         return {
             "success": True, "provider": self.provider, "mode": self.mode.value,

@@ -72,18 +72,25 @@ def _json(payload) -> str:
 
 @app.tool(name="web_search", description=(
     "Web search through a configurable provider chain with automatic failover. "
+    "Two modes: `mode=\"failover\"` (default) walks the chain one provider at a time "
+    "and returns the first success; `mode=\"fanout\"` queries up to UWR_SEARCH_FANOUT "
+    "providers concurrently, then merges and rank-fuses the results (provider="
+    "\"fanout\", every row carries `sources`; costs N× provider quota per search). "
     "Default chain: AnySearch -> Tavily -> DDGS; operators can reorder/extend it "
-    "with UWR_SEARCH_CHAIN (e.g. anysearch,tavily,yuanbao,bocha,deepseek,kimi,ddgs). Auth is "
+    "with UWR_SEARCH_CHAIN (e.g. anysearch,tavily,yuanbao,bocha,deepseek,kimi,ddgs) "
+    "and pick the default mode with UWR_SEARCH_MODE. Auth is "
     "automatic: a configured API key enables keyed mode, otherwise the provider's "
     "official keyless access is used. Returns JSON: "
     "{success, provider, mode, latency_ms, attempts, results: [{title, url, snippet, "
-    "published?, site?}]}. `providers` overrides the chain order for this one call "
-    "(e.g. [\"bocha\"] or [\"yuanbao\",\"tavily\"])."))
-def web_search_tool(query: str, limit: int = 5, providers: list[str] | None = None) -> str:
+    "published?, site?, sources?}]}. `providers` overrides the chain order for this "
+    "one call (e.g. [\"bocha\"] or [\"yuanbao\",\"tavily\"]); in fanout mode its first "
+    "N eligible entries are queried."))
+def web_search_tool(query: str, limit: int = 5, providers: list[str] | None = None,
+                    mode: str | None = None) -> str:
     try:
         result = router.search(str(query),
                                max(1, min(int(limit or 5), MAX_RESULTS_CAP)),
-                               providers=providers)
+                               providers=providers, mode=mode)
         return _json(result.to_dict())
     except InvalidInputError as exc:
         return _json({"success": False, "error": f"invalid input: {exc}"})
@@ -143,8 +150,9 @@ def web_fetch_tool(url: str = "", urls: list[str] | None = None,
 @app.tool(name="list_providers", description=(
     "List every provider this server knows: capabilities (search/fetch), whether it "
     "is usable right now (configured / key present), whether it is enabled, and its "
-    "1-based position in each active chain. Never returns key values. Use it to "
-    "decide what to pass in web_search/web_fetch `providers`."))
+    "1-based position in each active chain. Also reports the active search mode "
+    "(failover/fanout) and the fan-out fan width/grace. Never returns key values. "
+    "Use it to decide what to pass in web_search/web_fetch `providers`."))
 def list_providers_tool() -> str:
     disabled = config.disabled_providers()
     positions = {}
@@ -171,6 +179,8 @@ def list_providers_tool() -> str:
                    "fetch": router.resolve_names(Capability.FETCH)},
         "defaults": {"search": list(config.DEFAULT_SEARCH_CHAIN),
                      "fetch": list(config.DEFAULT_FETCH_CHAIN)},
+        "search_mode": config.search_mode(),
+        "fanout": {"n": config.fanout_providers(), "grace_s": config.fanout_grace()},
         "disabled": sorted(disabled),
         "providers": rows,
     })
