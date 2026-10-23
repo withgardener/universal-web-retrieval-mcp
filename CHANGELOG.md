@@ -29,14 +29,15 @@ All notable changes to this project. Format: Keep a Changelog; versioning: SemVe
   `skipped:not_configured`, `skipped:fanout` for eligible chain members beyond N,
   `skipped:grace` or `skipped:deadline`, and
   `list_providers` reports `search_mode` plus `fanout: {n, grace_s}`.
-- **Tests** (`tests/unit/test_fanout.py`, 49 cases, no network): mode selection
+- **Tests** (`tests/unit/test_fanout.py`, 52 cases, no network): mode selection
   from env and per call, invalid values, N clamping, `not_configured` skipping
   that does not consume a slot, real concurrency with sleeping stubs, grace
   cut-off, deadline enforcement, one provider failing while others succeed, all
   failing with the attempt trail attached, `fallback_eligible=False` isolation,
   URL-variant dedupe, RRF ordering and every tie-break, snippet/title/extra-field
   merging, `sources`, mixed mode, `list_providers`, and `web_fetch` staying
-  failover.
+  failover. A golden-dict test pins the failover payload byte-for-byte to the
+  0.2.3 shape.
 
 ### Changed
 
@@ -48,9 +49,12 @@ All notable changes to this project. Format: Keep a Changelog; versioning: SemVe
 - Thread safety reviewed for fan-out: providers are sync HTTP clients run one per
   thread; no provider keeps unsynchronised per-call state. Yuanbao's per-instance
   MCP session id and JSON-RPC counter are guarded by an `RLock`, and a concurrent
-  handshake race costs an extra session rather than correctness. A straggler is
-  never joined (`shutdown(wait=False, cancel_futures=True)`); its daemon worker
-  cannot delay interpreter exit, and its result is discarded.
+  handshake race costs an extra session rather than correctness. Fan-out starts one
+  daemon `threading.Thread` per selected provider and collects `(provider, outcome)`
+  records from a `queue.Queue`; only public standard-library APIs are used (no
+  `concurrent.futures` internals), so the behaviour is portable across Python
+  versions. A straggler is never joined: it finishes in its daemon thread, which
+  cannot delay interpreter exit, and its late record is discarded.
 
 ## 0.2.3 — 2026-10-21
 

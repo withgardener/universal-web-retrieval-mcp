@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 
 import pytest
@@ -39,6 +40,7 @@ class StubProvider(Provider):
         self.calls = 0
         self.limits = []
         self.timeouts = []
+        self.threads = []
 
     def api_key(self) -> str:
         return self._key
@@ -47,6 +49,8 @@ class StubProvider(Provider):
         self.calls += 1
         self.limits.append(limit)
         self.timeouts.append(timeout_override)
+        current = threading.current_thread()
+        self.threads.append((current.name, current.daemon))
         if self._delay:
             time.sleep(self._delay)
         if self._error is not None:
@@ -91,6 +95,35 @@ def test_default_mode_is_failover_and_unchanged():
     assert "sources" not in payload["results"][0]
     assert set(payload) == {"success", "provider", "mode", "latency_ms", "attempts",
                             "results"}
+
+
+def test_failover_payload_is_byte_identical_to_pre_fanout_golden():
+    """0.3.0 must not change one byte of a failover response.
+
+    The golden dict is built exactly the way ``SearchResult.to_dict`` built it in
+    0.2.3: fixed key order, extras only when non-empty, no ``sources``.
+    """
+    a = StubProvider("a", rows=[
+        {"title": "T", "url": "https://example.com/x", "snippet": "S",
+         "published": "2026-01-02", "site": "Example", "score": 0.5},
+        {"title": "U", "url": "https://example.com/y", "snippet": "V",
+         "published": "", "site": None, "score": None},
+    ])
+    result = router_with(a, StubProvider("b")).search("q", 5)
+    result.latency_ms = 12                        # fixed, so the payload is comparable
+    golden = {
+        "success": True, "provider": "a", "mode": "keyless", "latency_ms": 12,
+        "attempts": [{"provider": "a", "outcome": "ok"}],
+        "results": [
+            {"title": "T", "url": "https://example.com/x", "snippet": "S",
+             "published": "2026-01-02", "site": "Example", "score": 0.5},
+            {"title": "U", "url": "https://example.com/y", "snippet": "V"},
+        ],
+    }
+    payload = result.to_dict()
+    assert payload == golden
+    # Key order matters too: JSON consumers see the serialised bytes.
+    assert json.dumps(payload) == json.dumps(golden)
 
 
 def test_config_defaults():
@@ -215,14 +248,16 @@ def test_three_providers_run_concurrently(monkeypatch):
     monkeypatch.setenv("UWR_SEARCH_MODE", "fanout")
     monkeypatch.setenv("UWR_FANOUT_GRACE", "1")
     monkeypatch.setenv("UWR_SEARCH_FANOUT", "3")
-    providers = [StubProvider(f"p{i}", delay=0.3) for i in range(3)]
+    providers = [StubProvider(f"p{i}", delay=0.4) for i in range(3)]
     r = router_with(*providers)
     started = time.monotonic()
     result = r.search("q", 5)
     elapsed = time.monotonic() - started
     assert result.provider == "fanout"
     assert all(p.calls == 1 for p in providers)
-    assert elapsed < 0.85, f"fan-out was sequential: {elapsed:.2f}s for 3×0.3s"
+    # Sequential would be 1.2 s; parallel is ~0.4 s. The 1.0 s bound leaves >0.5 s
+    # of slack for slow CI scheduling while still failing a sequential run.
+    assert elapsed < 1.0, f"fan-out was sequential: {elapsed:.2f}s for 3×0.4s"
 
 
 def test_each_provider_gets_remaining_deadline_as_timeout(monkeypatch):
@@ -259,12 +294,12 @@ def test_grace_zero_waits_for_everyone(monkeypatch):
     monkeypatch.setenv("UWR_SEARCH_MODE", "fanout")
     monkeypatch.setenv("UWR_FANOUT_GRACE", "0")
     fast = StubProvider("fast", delay=0.02)
-    slow = StubProvider("slow", delay=0.25)
+    slow = StubProvider("slow", delay=0.3)
     r = router_with(fast, slow)
     started = time.monotonic()
     result = r.search("q", 5)
     elapsed = time.monotonic() - started
-    assert elapsed >= 0.24
+    assert elapsed >= 0.25
     assert [a["outcome"] for a in result.attempts] == ["ok", "ok"]
     assert {source for r_ in result.results for source in r_["sources"]} == {"fast", "slow"}
 
@@ -405,6 +440,14 @@ def test_missing_urls_are_not_merged_into_one_row():
     assert merged == []
 
 
+def test_malformed_rows_from_one_provider_do_not_sink_the_merge():
+    bad_rows: list = [None, "junk", row("https://example.com/ok")]
+    partly_bad: list = [{"url": None}, row("https://example.com/ok", title="b title")]
+    merged = merge_results([("a", bad_rows), ("b", partly_bad)], limit=5)
+    assert [r_["url"] for r_ in merged] == ["https://example.com/ok"]
+    assert merged[0]["sources"] == ["a", "b"]
+
+
 def test_duplicate_urls_within_one_provider_count_best_rank_once():
     merged = merge_results([
         ("a", [row("https://example.com/x", title="best", snippet="longest"),
@@ -416,15 +459,35 @@ def test_duplicate_urls_within_one_provider_count_best_rank_once():
     assert merged[0]["snippet"] == "longest"
 
 
-def test_fanout_workers_are_daemon_threads(monkeypatch):
-    from universal_web_retrieval.providers.router import _DaemonThreadPoolExecutor
+def test_fanout_runs_each_provider_on_its_own_daemon_thread(monkeypatch):
+    """Abandoned stragglers must be daemons: they can outlive the collector."""
+    monkeypatch.setenv("UWR_SEARCH_MODE", "fanout")
+    monkeypatch.setenv("UWR_FANOUT_GRACE", "1")
+    providers = [StubProvider("a"), StubProvider("b")]
+    result = router_with(*providers).search("q", 5)
+    assert result.provider == "fanout"
+    for provider in providers:
+        assert provider.threads, provider.NAME
+        name, daemon = provider.threads[0]
+        assert daemon is True
+        assert name == f"uwr-fanout-{provider.NAME}"
 
-    executor = _DaemonThreadPoolExecutor(max_workers=1, thread_name_prefix="test-daemon")
-    try:
-        future = executor.submit(lambda: __import__("threading").current_thread().daemon)
-        assert future.result(timeout=1) is True
-    finally:
-        executor.shutdown(wait=False, cancel_futures=True)
+
+def test_fanout_uses_only_public_concurrency_apis():
+    """No private ``concurrent.futures`` internals: they vary between versions."""
+    import ast
+    import inspect
+    from universal_web_retrieval.providers import router
+
+    tree = ast.parse(inspect.getsource(router))
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            imported.add(node.module or "")
+    assert not any(name.startswith("concurrent") for name in imported), imported
+    assert "_adjust_thread_count" not in inspect.getsource(router)
 
 
 def test_merge_dedupes_across_url_variants(monkeypatch):

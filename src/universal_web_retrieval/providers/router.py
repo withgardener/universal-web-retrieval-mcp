@@ -39,11 +39,9 @@ calls get a fresh deadline per call.
 from __future__ import annotations
 
 import logging
-import time
+import queue
 import threading
-import weakref
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from concurrent.futures.thread import _worker
+import time
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .. import config
@@ -60,27 +58,16 @@ _WARNED: set = set()
 FANOUT_PROVIDER_NAME = "fanout"
 
 
-class _DaemonThreadPoolExecutor(ThreadPoolExecutor):
-    """ThreadPoolExecutor whose abandoned workers cannot hold interpreter exit."""
+def _stop_reason(deadline: float, first_ok_at: Optional[float],
+                 grace: float) -> str:
+    """Why the collector stopped early: ``grace`` or ``deadline``.
 
-    def _adjust_thread_count(self) -> None:
-        if self._idle_semaphore.acquire(timeout=0):
-            return
-
-        def weakref_cb(_, work_queue=self._work_queue):
-            work_queue.put(None)
-
-        if len(self._threads) < self._max_workers:
-            thread_name = "%s_%d" % (self._thread_name_prefix or self,
-                                      len(self._threads))
-            thread = threading.Thread(
-                name=thread_name, target=_worker,
-                args=(weakref.ref(self, weakref_cb), self._work_queue,
-                      self._initializer, self._initargs), daemon=True)
-            thread.start()
-            self._threads.add(thread)
-            # Do not register in concurrent.futures' interpreter-exit join map:
-            # daemon workers are deliberately abandoned if they outlive the call.
+    The bounded wait always targeted ``min(deadline, first_ok_at + grace)``, so
+    whichever of the two is earlier is the reason we are here.
+    """
+    if first_ok_at is not None and grace > 0 and first_ok_at + grace <= deadline:
+        return "grace"
+    return "deadline"
 
 
 def _ms(started: float) -> int:
@@ -133,6 +120,26 @@ def _fanout_call(provider: Provider, query: str, limit: int,
             "mode": getattr(result, "mode", None) or provider.mode(),
             "latency_ms": _ms(started), "finished_at": time.monotonic()}
 
+
+def _fanout_worker(outbox: "queue.Queue[Tuple[str, Dict[str, Any]]]",
+                   provider: Provider, query: str, limit: int,
+                   budget: float) -> None:
+    """Run one provider search and publish ``(name, record)`` to the collector.
+
+    This runs on a DAEMON thread owned by the fan-out call. If the collector
+    stops waiting (grace window or deadline) the thread is simply abandoned: it
+    finishes whenever it likes, its record lands in a queue nobody reads, and it
+    cannot delay interpreter exit. Only public ``threading`` / ``queue`` APIs are
+    involved — no ``concurrent.futures`` internals — so this is stable across
+    Python versions.
+    """
+    try:
+        record = _fanout_call(provider, query, limit, budget)
+    except BaseException as exc:  # noqa: BLE001 — a worker must always report
+        record = {"outcome": "error", "error": str(exc), "auth_failure": False,
+                  "mode": provider.mode(), "latency_ms": 0,
+                  "finished_at": time.monotonic()}
+    outbox.put((provider.NAME, record))
 
 
 class ProviderRouter:
@@ -294,9 +301,10 @@ class ProviderRouter:
                 providers: Optional[Sequence[str]]) -> SearchResult:
         """Query up to N eligible providers concurrently, merge with RRF.
 
-        Bound by ONE deadline: every worker gets ``remaining`` as its timeout
-        override, the collector stops waiting ``grace`` seconds after the first
-        non-empty answer (``grace == 0`` waits for everyone), and a worker still
+        Bound by ONE deadline: every provider runs on its own daemon thread with
+        ``remaining`` as its timeout override, each reports one record on a
+        shared queue, and the collector stops waiting ``grace`` seconds after the
+        first non-empty answer (``grace == 0`` waits for everyone). A worker still
         running thereafter is recorded as ``skipped:grace`` / ``skipped:deadline``
         while its eventual result is discarded.
         """
@@ -384,48 +392,51 @@ class ProviderRouter:
                 records[provider.NAME] = {"outcome": "skipped:deadline"}
             raise _with_attempts(_failure_message(), _attempts())
 
-        futures: Dict[Any, Provider] = {}
+        # One daemon thread per selected provider, each publishing exactly one
+        # record to a shared queue. N is small (UWR_SEARCH_FANOUT, default 3), so
+        # a thread per provider is cheaper and far more portable than managing a
+        # pool — and an abandoned daemon thread cannot hold interpreter exit.
+        outbox: "queue.Queue[Tuple[str, Dict[str, Any]]]" = queue.Queue()
+        for provider in planned:
+            budget = max(0.05, deadline - time.monotonic())
+            threading.Thread(target=_fanout_worker,
+                             args=(outbox, provider, query, limit, budget),
+                             name=f"uwr-fanout-{provider.NAME}", daemon=True).start()
+
         first_ok_at: Optional[float] = None
         stopped_by: Optional[str] = None
-        executor = _DaemonThreadPoolExecutor(max_workers=max(1, len(planned)),
-                                             thread_name_prefix="uwr-fanout")
-        try:
-            for provider in planned:
-                budget = max(0.05, deadline - time.monotonic())
-                futures[executor.submit(_fanout_call, provider, query, limit, budget)] = provider
-
-            pending = set(futures)
-            while pending:
-                now = time.monotonic()
+        received = 0
+        while received < len(planned):
+            # Drain everything already reported BEFORE deciding to stop: a
+            # result that arrived inside the window must not be discarded just
+            # because the collector had not looked yet.
+            arrived: List[Tuple[str, Dict[str, Any]]] = []
+            while True:
+                try:
+                    arrived.append(outbox.get_nowait())
+                except queue.Empty:
+                    break
+            if not arrived:
                 if first_ok_at is None or grace <= 0:
-                    budget = deadline - now           # nothing to merge yet (or grace=0)
+                    wait_until = deadline           # nothing to merge yet (or grace=0)
                 else:
-                    budget = min(deadline, first_ok_at + grace) - now
-                if budget <= 0:
-                    stopped_by = ("grace" if first_ok_at is not None and grace > 0
-                                  and first_ok_at + grace <= deadline else "deadline")
+                    wait_until = min(deadline, first_ok_at + grace)
+                remaining = wait_until - time.monotonic()
+                if remaining <= 0:
+                    stopped_by = _stop_reason(deadline, first_ok_at, grace)
                     break
-                done, pending = wait(pending, timeout=budget,
-                                     return_when=FIRST_COMPLETED)
-                for future in done:
-                    provider = futures[future]
-                    try:
-                        record = future.result()      # worker wrapper normally never raises
-                    except BaseException as exc:      # preserve the trail for worker failures
-                        record = {"outcome": "error", "error": str(exc),
-                                  "auth_failure": False, "mode": provider.mode(),
-                                  "latency_ms": 0}
-                    records[provider.NAME] = record
-                    if record["outcome"] == "ok" and record["results"]:
-                        finished = record["finished_at"]
-                        if first_ok_at is None or finished < first_ok_at:
-                            first_ok_at = finished
-                if not done:
+                try:
+                    arrived.append(outbox.get(timeout=remaining))
+                except queue.Empty:
+                    stopped_by = _stop_reason(deadline, first_ok_at, grace)
                     break
-        finally:
-            # Never block on a straggler: it may finish in the background, and
-            # whatever it returns is discarded.
-            executor.shutdown(wait=False, cancel_futures=True)
+            for name, record in arrived:
+                received += 1
+                records[name] = record
+                if record["outcome"] == "ok" and record["results"]:
+                    finished = record["finished_at"]
+                    if first_ok_at is None or finished < first_ok_at:
+                        first_ok_at = finished
 
         for provider in planned:
             if provider.NAME not in records:
@@ -462,7 +473,7 @@ class ProviderRouter:
                             latency_ms=_ms(started), attempts=_attempts())
 
 
-def _with_attempts(message: str, attempts: List[Dict[str, str]]) -> ProviderError:
+def _with_attempts(message: str, attempts: List[Dict[str, Any]]) -> ProviderError:
     """Attach the attempt trail to a chain-level failure (surfaced by the tools)."""
     err = ProviderError(message)
     err.attempts = attempts

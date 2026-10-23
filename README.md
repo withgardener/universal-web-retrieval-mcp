@@ -206,7 +206,7 @@ When a provider exposes publication date / site (Yuanbao, Bocha, DeepSeek, Kimi,
 | `ok` | This provider produced the answer |
 | `error:<msg>` | Attempted and failed; the chain moved on |
 | `skipped:not_configured` | Keyed-only provider without a key — never called |
-| `skipped:deadline` | Fewer than 100 ms remain before the chain deadline, so no call starts |
+| `skipped:deadline` | The chain deadline passed before this provider could start (failover) or answer (fan-out) |
 | `skipped:grace` | *(fan-out only)* Still running when the grace window after the first answer closed; its result is discarded |
 | `skipped:fanout` | *(fan-out only)* Eligible chain member beyond the configured N-provider fan-out cutoff |
 
@@ -331,10 +331,12 @@ Selecting a mode:
 
 Merging (`fanout.py`):
 
-1. URLs are normalised for dedupe — scheme and host lower-cased, a leading `www.`
-   stripped, the fragment and tracking parameters (`utm_*`, `gclid`, `fbclid`,
+1. URLs are normalised for dedupe — scheme and host lower-cased, the host
+   IDNA-normalised with any leading `www.` stripped (ports and IPv6 literals
+   preserved), the fragment and tracking parameters (`utm_*`, `gclid`, `fbclid`,
    `mc_cid`, `mc_eid`, `ref`, `ref_src`, `spm`) dropped, remaining parameters
-   sorted, and a trailing `/` removed. The output keeps a real URL, not the key.
+   sorted, and a trailing `/` removed (except for the root path). The output keeps
+   a real URL, not the key.
 2. Reciprocal Rank Fusion: `score = Σ 1/(60 + rank)` over every provider that
    returned the URL, with a 1-based rank inside that provider's list. Ties break
    on number of sources, then best single rank, then chain order.
@@ -359,15 +361,15 @@ others.
 
 `web_fetch` is always failover: there is nothing to merge for a single URL.
 
-Concurrency: providers are synchronous HTTP clients, so fan-out runs one thread
-per provider (`concurrent.futures.ThreadPoolExecutor`) — no new dependency. Each
-worker gets its own timeout budget and shares no mutable per-call state. Yuanbao
-is the only provider holding per-instance state (MCP session id and JSON-RPC
-counter); both are guarded by an `RLock`, and a concurrent handshake race costs
-one extra session, not correctness. A straggler that outlives the grace window
-keeps running in a daemon thread; the collector never blocks on it
-(`shutdown(wait=False, cancel_futures=True)`), it cannot delay interpreter exit,
-and its result is dropped.
+Concurrency: providers are synchronous HTTP clients, so fan-out starts one daemon
+thread per selected provider — plain `threading.Thread` plus a `queue.Queue` of
+`(provider, outcome)` records, no new dependency and no private interpreter
+internals. Each worker gets its own timeout budget and shares no mutable per-call
+state. Yuanbao is the only provider holding per-instance state (MCP session id and
+JSON-RPC counter); both are guarded by an `RLock`, and a concurrent handshake race
+costs one extra session, not correctness. A straggler that outlives the grace
+window keeps running in its daemon thread; the collector never joins it, it cannot
+delay interpreter exit, and the result it eventually posts is dropped.
 
 ## Provider behavior
 

@@ -86,6 +86,9 @@ def merge_results(provider_rows: Sequence[Tuple[str, Iterable[Dict[str, Any]]]],
 
     for chain_index, (_name, rows) in enumerate(provider_rows):
         for rank, row in enumerate(rows or (), start=1):
+            if not isinstance(row, dict):
+                # A malformed row from one provider must not sink the merge.
+                continue
             key = dedupe_key(str(row.get("url") or ""))
             if not key:
                 continue
