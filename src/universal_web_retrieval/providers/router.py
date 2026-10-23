@@ -40,7 +40,10 @@ from __future__ import annotations
 
 import logging
 import time
+import threading
+import weakref
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from concurrent.futures.thread import _worker
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .. import config
@@ -55,6 +58,29 @@ log = logging.getLogger("universal_web_retrieval.router")
 _WARNED: set = set()
 
 FANOUT_PROVIDER_NAME = "fanout"
+
+
+class _DaemonThreadPoolExecutor(ThreadPoolExecutor):
+    """ThreadPoolExecutor whose abandoned workers cannot hold interpreter exit."""
+
+    def _adjust_thread_count(self) -> None:
+        if self._idle_semaphore.acquire(timeout=0):
+            return
+
+        def weakref_cb(_, work_queue=self._work_queue):
+            work_queue.put(None)
+
+        if len(self._threads) < self._max_workers:
+            thread_name = "%s_%d" % (self._thread_name_prefix or self,
+                                      len(self._threads))
+            thread = threading.Thread(
+                name=thread_name, target=_worker,
+                args=(weakref.ref(self, weakref_cb), self._work_queue,
+                      self._initializer, self._initargs), daemon=True)
+            thread.start()
+            self._threads.add(thread)
+            # Do not register in concurrent.futures' interpreter-exit join map:
+            # daemon workers are deliberately abandoned if they outlive the call.
 
 
 def _ms(started: float) -> int:
@@ -291,7 +317,8 @@ class ProviderRouter:
                 layout.append(("skipped", provider))
                 continue
             if len(planned) >= slots:
-                break
+                layout.append(("beyond", provider))
+                continue
             layout.append(("run", provider))
             planned.append(provider)
 
@@ -305,9 +332,13 @@ class ProviderRouter:
                 if kind == "skipped":
                     out.append({"provider": name, "outcome": "skipped:not_configured"})
                     continue
+                if kind == "beyond":
+                    out.append({"provider": name, "outcome": "skipped:fanout"})
+                    continue
                 record = records.get(name)
                 if record is None:
-                    continue          # beyond the N cutoff: never queried, no entry
+                    out.append({"provider": name, "outcome": "skipped:deadline"})
+                    continue
                 if record["outcome"] == "ok":
                     out.append({"provider": name, "outcome": "ok",
                                 "results": record["results"],
@@ -325,6 +356,9 @@ class ProviderRouter:
                 name = provider.NAME
                 if kind == "skipped":
                     errors.append(f"{name}: skipped (not_configured)")
+                    continue
+                if kind == "beyond":
+                    errors.append(f"{name}: skipped (fanout limit)")
                     continue
                 record = records.get(name)
                 if record is None:
@@ -352,8 +386,9 @@ class ProviderRouter:
 
         futures: Dict[Any, Provider] = {}
         first_ok_at: Optional[float] = None
-        executor = ThreadPoolExecutor(max_workers=max(1, len(planned)),
-                                      thread_name_prefix="uwr-fanout")
+        stopped_by: Optional[str] = None
+        executor = _DaemonThreadPoolExecutor(max_workers=max(1, len(planned)),
+                                             thread_name_prefix="uwr-fanout")
         try:
             for provider in planned:
                 budget = max(0.05, deadline - time.monotonic())
@@ -367,12 +402,19 @@ class ProviderRouter:
                 else:
                     budget = min(deadline, first_ok_at + grace) - now
                 if budget <= 0:
+                    stopped_by = ("grace" if first_ok_at is not None and grace > 0
+                                  and first_ok_at + grace <= deadline else "deadline")
                     break
                 done, pending = wait(pending, timeout=budget,
                                      return_when=FIRST_COMPLETED)
                 for future in done:
                     provider = futures[future]
-                    record = future.result()          # _fanout_call never raises
+                    try:
+                        record = future.result()      # worker wrapper normally never raises
+                    except BaseException as exc:      # preserve the trail for worker failures
+                        record = {"outcome": "error", "error": str(exc),
+                                  "auth_failure": False, "mode": provider.mode(),
+                                  "latency_ms": 0}
                     records[provider.NAME] = record
                     if record["outcome"] == "ok" and record["results"]:
                         finished = record["finished_at"]
@@ -388,8 +430,7 @@ class ProviderRouter:
         for provider in planned:
             if provider.NAME not in records:
                 records[provider.NAME] = {
-                    "outcome": ("skipped:grace" if first_ok_at is not None
-                                else "skipped:deadline")}
+                    "outcome": (f"skipped:{stopped_by or ('grace' if first_ok_at is not None else 'deadline')}")}
 
         for provider in planned:
             record = records.get(provider.NAME) or {}

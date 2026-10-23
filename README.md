@@ -208,6 +208,7 @@ When a provider exposes publication date / site (Yuanbao, Bocha, DeepSeek, Kimi,
 | `skipped:not_configured` | Keyed-only provider without a key — never called |
 | `skipped:deadline` | Fewer than 100 ms remain before the chain deadline, so no call starts |
 | `skipped:grace` | *(fan-out only)* Still running when the grace window after the first answer closed; its result is discarded |
+| `skipped:fanout` | *(fan-out only)* Eligible chain member beyond the configured N-provider fan-out cutoff |
 
 **Success schema (search):** `{"success": true, "provider": ..., "mode": ..., "latency_ms": ..., "attempts": [...], "results": [...]}`. **Provider error schema:** `{"success": false, "error": "...", "attempts": [...]}`. **Invalid-input schema:** `{"success": false, "error": "invalid input: ..."}` (no `attempts`). Fetch returns one object per URL with `url`, `content`, `content_type`, `title`, `provider`, `mode`, `latency_ms`, and `attempts`; failed URLs carry `error` and `attempts` instead of success metadata.
 
@@ -344,7 +345,8 @@ Merging (`fanout.py`):
 Fan-out responses set `provider: "fanout"` and `mode` to the shared auth mode of
 the answering providers, or `"mixed"` when they differ. `attempts` carries one
 entry per queried provider: `ok` (plus `results` and `latency_ms`),
-`error:<msg>`, `skipped:not_configured`, `skipped:grace` (still running when the
+`error:<msg>`, `skipped:not_configured`, `skipped:fanout` (beyond the N-provider
+cutoff), `skipped:grace` (still running when the
 grace window closed — its result is discarded) or `skipped:deadline`. If every
 provider fails, the error is the same `all providers failed: ...` with the trail
 attached, and one provider's `fallback_eligible=False` error does not abort the
@@ -363,8 +365,9 @@ worker gets its own timeout budget and shares no mutable per-call state. Yuanbao
 is the only provider holding per-instance state (MCP session id and JSON-RPC
 counter); both are guarded by an `RLock`, and a concurrent handshake race costs
 one extra session, not correctness. A straggler that outlives the grace window
-keeps running in the background; the collector never blocks on it
-(`shutdown(wait=False, cancel_futures=True)`) and its result is dropped.
+keeps running in a daemon thread; the collector never blocks on it
+(`shutdown(wait=False, cancel_futures=True)`), it cannot delay interpreter exit,
+and its result is dropped.
 
 ## Provider behavior
 

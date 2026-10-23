@@ -26,9 +26,10 @@ All notable changes to this project. Format: Keep a Changelog; versioning: SemVe
 - **Fan-out observability**: results report `provider: "fanout"` and a `mode` of
   `keyed`/`keyless`/`mixed` (new `AuthMode.MIXED`), `attempts` carries one entry
   per queried provider with `ok` + `results`/`latency_ms`, `error:<msg>`,
-  `skipped:not_configured`, `skipped:grace` or `skipped:deadline`, and
+  `skipped:not_configured`, `skipped:fanout` for eligible chain members beyond N,
+  `skipped:grace` or `skipped:deadline`, and
   `list_providers` reports `search_mode` plus `fanout: {n, grace_s}`.
-- **Tests** (`tests/unit/test_fanout.py`, 43 cases, no network): mode selection
+- **Tests** (`tests/unit/test_fanout.py`, 49 cases, no network): mode selection
   from env and per call, invalid values, N clamping, `not_configured` skipping
   that does not consume a slot, real concurrency with sleeping stubs, grace
   cut-off, deadline enforcement, one provider failing while others succeed, all
@@ -48,8 +49,8 @@ All notable changes to this project. Format: Keep a Changelog; versioning: SemVe
   thread; no provider keeps unsynchronised per-call state. Yuanbao's per-instance
   MCP session id and JSON-RPC counter are guarded by an `RLock`, and a concurrent
   handshake race costs an extra session rather than correctness. A straggler is
-  never joined (`shutdown(wait=False, cancel_futures=True)`) and its result is
-  discarded.
+  never joined (`shutdown(wait=False, cancel_futures=True)`); its daemon worker
+  cannot delay interpreter exit, and its result is discarded.
 
 ## 0.2.3 — 2026-10-21
 

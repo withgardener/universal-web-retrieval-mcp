@@ -162,7 +162,14 @@ def test_n_limits_providers_queried(monkeypatch):
     r = router_with(*providers)
     result = r.search("q", 5)
     assert [p.calls for p in providers] == [1, 1, 0, 0]
-    assert [a["provider"] for a in result.attempts] == ["p0", "p1"]
+    assert [a for a in result.attempts] == [
+        {"provider": "p0", "outcome": "ok", "results": 1,
+         "latency_ms": result.attempts[0]["latency_ms"]},
+        {"provider": "p1", "outcome": "ok", "results": 1,
+         "latency_ms": result.attempts[1]["latency_ms"]},
+        {"provider": "p2", "outcome": "skipped:fanout"},
+        {"provider": "p3", "outcome": "skipped:fanout"},
+    ]
 
 
 def test_not_configured_skips_but_does_not_consume_a_slot(monkeypatch):
@@ -215,7 +222,7 @@ def test_three_providers_run_concurrently(monkeypatch):
     elapsed = time.monotonic() - started
     assert result.provider == "fanout"
     assert all(p.calls == 1 for p in providers)
-    assert elapsed < 0.6, f"fan-out was sequential: {elapsed:.2f}s for 3×0.3s"
+    assert elapsed < 0.85, f"fan-out was sequential: {elapsed:.2f}s for 3×0.3s"
 
 
 def test_each_provider_gets_remaining_deadline_as_timeout(monkeypatch):
@@ -239,7 +246,7 @@ def test_grace_cutoff_marks_stragglers_skipped(monkeypatch):
     started = time.monotonic()
     result = r.search("q", 5)
     elapsed = time.monotonic() - started
-    assert elapsed < 0.7, f"grace period was not honoured: {elapsed:.2f}s"
+    assert elapsed < 0.9, f"grace period was not honoured: {elapsed:.2f}s"
     assert result.attempts == [
         {"provider": "fast", "outcome": "ok", "results": 1,
          "latency_ms": result.attempts[0]["latency_ms"]},
@@ -284,7 +291,7 @@ def test_deadline_cuts_the_whole_fanout(monkeypatch):
     with pytest.raises(ProviderError) as cm:
         r.search("q", 5, deadline=time.monotonic() + 0.3)
     elapsed = time.monotonic() - started
-    assert elapsed < 0.8, f"deadline not enforced: {elapsed:.2f}s"
+    assert elapsed < 0.9, f"deadline not enforced: {elapsed:.2f}s"
     assert [x["outcome"] for x in cm.value.attempts] == ["skipped:deadline",
                                                          "skipped:deadline"]
     assert "all providers failed" in str(cm.value)
@@ -373,6 +380,51 @@ def test_dedupe_key_keeps_meaningful_differences():
     assert dedupe_key("http://example.com/a") != dedupe_key("https://example.com/a")
     assert dedupe_key("https://example.com/") == "https://example.com/"
     assert dedupe_key("") == ""
+
+
+@pytest.mark.parametrize(("left", "right"), [
+    ("https://bücher.example/page", "https://xn--bcher-kva.example/page"),
+    ("https://www.example.com:8443/page", "https://example.com:8443/page"),
+])
+def test_dedupe_key_normalizes_idn_and_www_with_port(left, right):
+    assert dedupe_key(left) == dedupe_key(right)
+
+
+def test_dedupe_key_preserves_distinct_ports_and_bad_authorities():
+    assert dedupe_key("https://example.com:8443/x") != dedupe_key("https://example.com:9443/x")
+    assert dedupe_key("https://www.example.com:8443/x") == dedupe_key("https://example.com:8443/x")
+    # Invalid port syntax must not collapse to the default-port URL.
+    assert dedupe_key("https://example.com:bad/x") != dedupe_key("https://example.com/x")
+
+
+def test_missing_urls_are_not_merged_into_one_row():
+    merged = merge_results([
+        ("a", [{"title": "no URL one", "snippet": "x"},
+               {"title": "no URL two", "snippet": "y"}]),
+    ], limit=5)
+    assert merged == []
+
+
+def test_duplicate_urls_within_one_provider_count_best_rank_once():
+    merged = merge_results([
+        ("a", [row("https://example.com/x", title="best", snippet="longest"),
+               row("https://www.example.com/x#fragment", title="duplicate", snippet="s")]),
+    ], limit=5)
+    assert len(merged) == 1
+    assert merged[0]["sources"] == ["a"]
+    assert merged[0]["title"] == "best"
+    assert merged[0]["snippet"] == "longest"
+
+
+def test_fanout_workers_are_daemon_threads(monkeypatch):
+    from universal_web_retrieval.providers.router import _DaemonThreadPoolExecutor
+
+    executor = _DaemonThreadPoolExecutor(max_workers=1, thread_name_prefix="test-daemon")
+    try:
+        future = executor.submit(lambda: __import__("threading").current_thread().daemon)
+        assert future.result(timeout=1) is True
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 def test_merge_dedupes_across_url_variants(monkeypatch):

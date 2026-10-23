@@ -44,12 +44,23 @@ def dedupe_key(raw_url: str) -> str:
         return url.lower()
 
     scheme = parts.scheme.lower()
-    host = (parts.netloc or "").lower()
-    if host.startswith("www."):
-        host = host[4:]
-    if not scheme and not host:
+    if not scheme and not parts.netloc:
         # Not an absolute URL: normalise the path-ish text only.
         return url.lower().rstrip("/")
+
+    # Use parsed hostname so IDNs have a stable ASCII representation and www.
+    # is stripped from the host rather than from userinfo or a port suffix.
+    try:
+        hostname = parts.hostname or ""
+        host = hostname.encode("idna").decode("ascii").lower()
+        if host.startswith("www."):
+            host = host[4:]
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"  # IPv6 literal
+        port = parts.port
+    except (UnicodeError, ValueError):
+        return url.lower()
+    authority = host + (f":{port}" if port is not None else "")
 
     path = parts.path or "/"
     if path != "/":
@@ -58,7 +69,7 @@ def dedupe_key(raw_url: str) -> str:
     params = sorted((name, value) for name, value in
                     parse_qsl(parts.query, keep_blank_values=True)
                     if not _is_tracking(name))
-    key = f"{scheme}://{host}{path}"
+    key = f"{scheme}://{authority}{path}"
     query = urlencode(params)
     return f"{key}?{query}" if query else key
 
