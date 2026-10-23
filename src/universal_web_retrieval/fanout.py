@@ -4,8 +4,10 @@ Fan-out asks several providers the same query and then has to turn N ranked
 lists into ONE ranked list. Two steps:
 
 ``dedupe_key``  normalises a result URL so the same page fetched from different
-                providers collapses into one row. Tracking parameters, ``www.``,
-                fragments, parameter order and a trailing slash are all noise.
+                providers collapses into one row. The scheme, default ports,
+                tracking parameters, ``www.``, fragments, parameter order and a
+                trailing slash are all noise: ``http://`` and ``https://`` are
+                the same page for matching purposes.
 ``merge_results`` scores the collapsed rows with RRF (``sum 1/(k + rank)``),
                 breaks ties deterministically, and keeps the best-ranked
                 occurrence's title/URL while taking the longest snippet.
@@ -34,7 +36,13 @@ def _is_tracking(name: str) -> bool:
 
 
 def dedupe_key(raw_url: str) -> str:
-    """Normalise a result URL into a stable merge key ('' when unusable)."""
+    """Normalise a result URL into a stable merge key ('' when unusable).
+
+    The key is scheme-less (``//host[:port]/path?query``): providers routinely
+    report one page as ``http://`` and another as ``https://``, and a default
+    port (``:80`` for http, ``:443`` for https) names the same endpoint as no
+    port at all. Both are matching noise, so both are dropped here.
+    """
     url = (raw_url or "").strip()
     if not url:
         return ""
@@ -60,6 +68,11 @@ def dedupe_key(raw_url: str) -> str:
         port = parts.port
     except (UnicodeError, ValueError):
         return url.lower()
+    # A default port is the same endpoint as no port: drop it. Only the port
+    # that is default for THIS scheme goes, so an explicit non-default port
+    # (:8443, or :443 on a plain-http URL) stays part of the key.
+    if (scheme == "http" and port == 80) or (scheme == "https" and port == 443):
+        port = None
     authority = host + (f":{port}" if port is not None else "")
 
     path = parts.path or "/"
@@ -69,7 +82,7 @@ def dedupe_key(raw_url: str) -> str:
     params = sorted((name, value) for name, value in
                     parse_qsl(parts.query, keep_blank_values=True)
                     if not _is_tracking(name))
-    key = f"{scheme}://{authority}{path}"
+    key = f"//{authority}{path}"
     query = urlencode(params)
     return f"{key}?{query}" if query else key
 

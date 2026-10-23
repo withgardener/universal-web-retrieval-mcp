@@ -318,6 +318,25 @@ never by the slowest provider. In exchange it buys agreement: a page several
 providers return outranks a page only one of them found, which is what you want
 when a wrong first hit is expensive.
 
+### Latency and quota
+
+Measured on the default chain (`anysearch,tavily,ddgs`) with N=3 and the default
+5 s grace:
+
+| Scenario | Wall time |
+|---|---|
+| `failover`, first provider healthy | ~2 s |
+| `fanout`, third provider slow | ~7 s |
+| `fanout`, all three providers fast | ~2.5 s |
+
+In the slow case the first two providers answered at about 2.1 s and `ddgs` was
+still running when the grace window closed: the response came back at about 7 s
+with `ddgs` recorded as `skipped:grace`. All three calls were made either way, so
+every fan-out spends N× provider quota — including the ones whose answers are
+thrown away. An abandoned provider keeps running in its daemon thread and may
+still complete (and be billed) in the background; the grace window decides what
+you wait for, not what you pay for.
+
 Selecting a mode:
 
 - `UWR_SEARCH_MODE=fanout` (or `failover`) sets the default for every call.
@@ -331,12 +350,14 @@ Selecting a mode:
 
 Merging (`fanout.py`):
 
-1. URLs are normalised for dedupe — scheme and host lower-cased, the host
-   IDNA-normalised with any leading `www.` stripped (ports and IPv6 literals
-   preserved), the fragment and tracking parameters (`utm_*`, `gclid`, `fbclid`,
-   `mc_cid`, `mc_eid`, `ref`, `ref_src`, `spm`) dropped, remaining parameters
-   sorted, and a trailing `/` removed (except for the root path). The output keeps
-   a real URL, not the key.
+1. URLs are normalised for dedupe into a scheme-less key,
+   `//host[:port]/path?query`, so `http://` and `https://` for one page collapse
+   — as does a default port (`:80` for http, `:443` for https). The host is
+   IDNA-normalised with any leading `www.` stripped (non-default ports and IPv6
+   literals preserved), the fragment and tracking parameters (`utm_*`, `gclid`,
+   `fbclid`, `mc_cid`, `mc_eid`, `ref`, `ref_src`, `spm`) dropped, remaining
+   parameters sorted, and a trailing `/` removed (except for the root path). The
+   output keeps the best-ranked occurrence's original URL, not the key.
 2. Reciprocal Rank Fusion: `score = Σ 1/(60 + rank)` over every provider that
    returned the URL, with a 1-based rank inside that provider's list. Ties break
    on number of sources, then best single rank, then chain order.
@@ -349,10 +370,13 @@ the answering providers, or `"mixed"` when they differ. `attempts` carries one
 entry per queried provider: `ok` (plus `results` and `latency_ms`),
 `error:<msg>`, `skipped:not_configured`, `skipped:fanout` (beyond the N-provider
 cutoff), `skipped:grace` (still running when the
-grace window closed — its result is discarded) or `skipped:deadline`. If every
-provider fails, the error is the same `all providers failed: ...` with the trail
-attached, and one provider's `fallback_eligible=False` error does not abort the
-others.
+grace window closed — its result is discarded) or `skipped:deadline`. Success
+requires at least one provider to answer OK, not at least one hit: if every
+answering provider returns an empty list, the response is a success with
+`results: []` and `ok` / `results: 0` entries in `attempts` — the same thing
+failover returns for that query. Only when no provider answers OK at all is it
+the same `all providers failed: ...` error with the trail attached, and one
+provider's `fallback_eligible=False` error does not abort the others.
 
 ```json
 {"query": "rust async runtime", "mode": "fanout",

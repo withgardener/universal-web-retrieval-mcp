@@ -16,6 +16,7 @@ from universal_web_retrieval.errors import (AuthMode, Capability, FetchResult,
                                             InvalidInputError, Provider,
                                             ProviderError, SearchResult)
 from universal_web_retrieval.fanout import _rank_key, dedupe_key, merge_results
+from universal_web_retrieval.providers import router as router_module
 from universal_web_retrieval.providers.router import ProviderRouter
 
 
@@ -74,6 +75,20 @@ def router_with(*providers):
     r = ProviderRouter(providers={p.NAME: p for p in providers})
     r._providers = {Capability.SEARCH: list(providers), Capability.FETCH: list(providers)}
     return r
+
+
+class SkewedClock:
+    """``time.monotonic`` stand-in whose offset a provider can jump on purpose.
+
+    Lets a test say "this provider's record says it finished 10 s later" without
+    sleeping for 10 s and without depending on real scheduling.
+    """
+
+    def __init__(self) -> None:
+        self.skew = 0.0
+
+    def monotonic(self) -> float:
+        return time.monotonic() + self.skew
 
 
 def row(url, title="t", snippet="s", **extra):
@@ -304,6 +319,31 @@ def test_grace_zero_waits_for_everyone(monkeypatch):
     assert {source for r_ in result.results for source in r_["sources"]} == {"fast", "slow"}
 
 
+def test_a_record_finishing_after_the_window_is_not_merged(monkeypatch):
+    """The cut-off is a finish time, not "had the collector looked yet".
+
+    A record that reaches the queue just after ``first_ok_at + grace`` can ride
+    along with an in-window record into the next drain. It must still be
+    ``skipped:grace``: the window closed before it finished.
+    """
+    monkeypatch.setenv("UWR_SEARCH_MODE", "fanout")
+    monkeypatch.setenv("UWR_FANOUT_GRACE", "0.2")
+    clock = SkewedClock()
+    monkeypatch.setattr(router_module, "time", clock)
+
+    class LateProvider(StubProvider):
+        def search(self, query, limit, timeout_override=None):
+            result = super().search(query, limit, timeout_override)
+            clock.skew += 10.0     # its record claims to finish 10 s from now
+            return result
+
+    prompt = StubProvider("prompt", delay=0.005)
+    late = LateProvider("late", delay=0.05)
+    result = router_with(prompt, late).search("q", 5)
+    assert [a["outcome"] for a in result.attempts] == ["ok", "skipped:grace"]
+    assert [r_["sources"] for r_ in result.results] == [["prompt"]]
+
+
 # ---------------------------------------------------------------- deadline
 def test_deadline_already_passed_skips_without_calling(monkeypatch):
     monkeypatch.setenv("UWR_SEARCH_MODE", "fanout")
@@ -361,7 +401,7 @@ def test_all_fail_raises_with_attempts(monkeypatch):
     assert all(x["outcome"].startswith("error:") for x in cm.value.attempts)
 
 
-def test_empty_results_do_not_count_as_success(monkeypatch):
+def test_an_empty_provider_contributes_nothing_but_does_not_fail(monkeypatch):
     monkeypatch.setenv("UWR_SEARCH_MODE", "fanout")
     monkeypatch.setenv("UWR_FANOUT_GRACE", "1")
     empty = StubProvider("empty", rows=[])
@@ -371,6 +411,52 @@ def test_empty_results_do_not_count_as_success(monkeypatch):
     assert result.attempts[0] == {"provider": "empty", "outcome": "ok", "results": 0,
                                   "latency_ms": result.attempts[0]["latency_ms"]}
     assert [r_["sources"] for r_ in result.results] == [["good"]]
+
+
+def test_all_empty_answers_are_a_success_with_no_rows(monkeypatch):
+    """Same rule as failover: at least one OK answer — not one hit — is success."""
+    monkeypatch.setenv("UWR_SEARCH_MODE", "fanout")
+    monkeypatch.setenv("UWR_FANOUT_GRACE", "1")
+    first = StubProvider("first", rows=[])
+    second = StubProvider("second", rows=[])
+    r = router_with(first, second)
+    result = r.search("q", 5)
+    assert result.provider == "fanout"
+    assert result.results == []
+    assert result.mode is AuthMode.KEYLESS
+    assert result.attempts == [
+        {"provider": "first", "outcome": "ok", "results": 0,
+         "latency_ms": result.attempts[0]["latency_ms"]},
+        {"provider": "second", "outcome": "ok", "results": 0,
+         "latency_ms": result.attempts[1]["latency_ms"]},
+    ]
+    payload = result.to_dict()
+    assert payload["success"] is True
+    assert payload["results"] == []
+    # What failover does with the same query, for comparison.
+    failover = router_with(StubProvider("solo", rows=[])).search("q", 5, mode="failover")
+    assert failover.results == [] and failover.provider == "solo"
+
+
+def test_all_empty_answers_still_report_mixed_modes(monkeypatch):
+    monkeypatch.setenv("UWR_SEARCH_MODE", "fanout")
+    monkeypatch.setenv("UWR_FANOUT_GRACE", "1")
+    r = router_with(StubProvider("keyed", rows=[], key="k"),
+                    StubProvider("keyless", rows=[]))
+    result = r.search("q", 5)
+    assert result.results == []
+    assert result.mode is AuthMode.MIXED
+
+
+def test_an_empty_answer_survives_the_other_providers_failing(monkeypatch):
+    monkeypatch.setenv("UWR_SEARCH_MODE", "fanout")
+    monkeypatch.setenv("UWR_FANOUT_GRACE", "1")
+    r = router_with(StubProvider("bad", error=ProviderError("boom")),
+                    StubProvider("empty", rows=[]))
+    result = r.search("q", 5)
+    assert result.results == []
+    assert result.attempts[0]["outcome"].startswith("error:")
+    assert result.attempts[1]["outcome"] == "ok"
 
 
 def test_non_fallback_eligible_error_does_not_abort_the_fanout(monkeypatch):
@@ -412,9 +498,34 @@ def test_dedupe_key_collapses_noise(variant):
 def test_dedupe_key_keeps_meaningful_differences():
     assert dedupe_key("https://example.com/a") != dedupe_key("https://example.com/b")
     assert dedupe_key("https://example.com/a?id=1") != dedupe_key("https://example.com/a?id=2")
-    assert dedupe_key("http://example.com/a") != dedupe_key("https://example.com/a")
-    assert dedupe_key("https://example.com/") == "https://example.com/"
+    assert dedupe_key("https://example.com:8443/a") != dedupe_key("https://example.com/a")
+    # Only the default port for the URL's own scheme is noise.
+    assert dedupe_key("https://example.com:80/a") != dedupe_key("https://example.com/a")
+    assert dedupe_key("https://example.com/") == "//example.com/"
     assert dedupe_key("") == ""
+
+
+@pytest.mark.parametrize(("left", "right"), [
+    ("http://example.com/a", "https://example.com/a"),
+    ("http://www.example.com/a/", "https://example.com/a"),
+    ("https://example.com:443/a", "https://example.com/a"),
+    ("http://example.com:80/a", "http://example.com/a"),
+])
+def test_dedupe_key_ignores_scheme_and_default_ports(left, right):
+    assert dedupe_key(left) == dedupe_key(right)
+
+
+def test_merge_collapses_http_and_https_into_one_row():
+    merged = merge_results([
+        ("a", [row("http://example.com/x", title="plain", snippet="short")]),
+        ("b", [row("https://example.com/x", title="tls", snippet="a longer snippet")]),
+    ], limit=5)
+    assert len(merged) == 1
+    assert merged[0]["sources"] == ["a", "b"]
+    # The output URL is still the best-ranked occurrence's original one.
+    assert merged[0]["url"] == "http://example.com/x"
+    assert merged[0]["title"] == "plain"
+    assert merged[0]["snippet"] == "a longer snippet"
 
 
 @pytest.mark.parametrize(("left", "right"), [

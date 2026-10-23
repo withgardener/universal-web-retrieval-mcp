@@ -307,6 +307,12 @@ class ProviderRouter:
         first non-empty answer (``grace == 0`` waits for everyone). A worker still
         running thereafter is recorded as ``skipped:grace`` / ``skipped:deadline``
         while its eventual result is discarded.
+
+        Success needs at least one provider to answer OK (as in failover): if
+        every OK answer is empty, the call succeeds with ``results=[]``. Only
+        "no provider answered OK" raises. A record is judged by its own finish
+        time, so a late arrival after the window is skipped even if the collector
+        happened to drain it afterwards.
         """
         chain = self.chain(Capability.SEARCH, providers)   # may raise InvalidInputError
         if deadline is None:
@@ -372,8 +378,9 @@ class ProviderRouter:
                 if record is None:
                     continue
                 if record["outcome"] == "ok":
-                    if not record["results"]:
-                        errors.append(f"{name}: no results")
+                    # Unreachable: any OK record is a success, handled by the
+                    # caller before it builds a failure message.
+                    continue
                 elif record["outcome"] == "skipped:grace":
                     errors.append(f"{name}: skipped (grace elapsed before it answered)")
                 elif record["outcome"] == "skipped:deadline":
@@ -451,22 +458,39 @@ class ProviderRouter:
                           provider.NAME, _mode_name(record.get("mode")),
                           str(record.get("error", ""))[:200])
 
-        contributors = [(provider.NAME, records[provider.NAME]["result"].results,
-                         records[provider.NAME]["mode"])
-                        for provider in planned
-                        if records.get(provider.NAME, {}).get("outcome") == "ok"
-                        and records[provider.NAME]["results"]]
-        if not contributors:
+        # The window closed at ``min(deadline, first_ok_at + grace)``. A record
+        # can reach the queue after that instant and still be picked up by the
+        # next drain (it arrived in the same batch as an in-window record), so
+        # judge each record by its own finish time: the cut-off must not depend
+        # on when the collector got around to looking.
+        if first_ok_at is not None and grace > 0:
+            cut_off = min(deadline, first_ok_at + grace)
+        else:
+            cut_off = deadline
+        late_reason = _stop_reason(deadline, first_ok_at, grace)
+        for name, record in list(records.items()):
+            finished = record.get("finished_at")
+            if finished is not None and finished > cut_off:
+                records[name] = {"outcome": f"skipped:{late_reason}"}
+
+        answered = [provider.NAME for provider in planned
+                    if records.get(provider.NAME, {}).get("outcome") == "ok"]
+        if not answered:
             raise _with_attempts(_failure_message(), _attempts())
 
-        rows = merge_results([(name, hits) for name, hits, _mode in contributors], limit)
+        contributors = [(name, records[name]["result"].results, records[name]["mode"])
+                        for name in answered if records[name]["results"]]
+        rows = (merge_results([(name, hits) for name, hits, _mode in contributors], limit)
+                if contributors else [])
 
-        # One auth mode if the answering providers agree, otherwise "mixed".
-        mode_names = sorted({_mode_name(mode) for _name, _hits, mode in contributors})
+        # No hits is not a failure: every OK provider simply answered with an
+        # empty list, which is what failover returns in the same situation.
+        # Only "no provider answered OK at all" raises (above).
+        mode_names = sorted({_mode_name(records[name]["mode"]) for name in answered})
         if len(mode_names) > 1:
             result_mode = AuthMode.MIXED
         else:
-            first_mode = contributors[0][2]
+            first_mode = records[answered[0]]["mode"]
             result_mode = first_mode if isinstance(first_mode, AuthMode) else AuthMode(first_mode)
 
         return SearchResult(results=rows, provider=FANOUT_PROVIDER_NAME, mode=result_mode,

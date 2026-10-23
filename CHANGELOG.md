@@ -16,9 +16,11 @@ All notable changes to this project. Format: Keep a Changelog; versioning: SemVe
   bound is still the shared chain deadline, and each provider gets the remaining
   budget as its timeout. Failover remains the default and its behaviour is
   unchanged.
-- **Merge layer** (`fanout.py`): URL normalisation for dedupe (lower-cased
-  scheme/host, leading `www.` stripped, fragment and tracking parameters
-  dropped, remaining parameters sorted, trailing slash removed), Reciprocal Rank
+- **Merge layer** (`fanout.py`): URL normalisation for a scheme-less dedupe key
+  (`//host[:port]/path?query`, so `http://` and `https://` for one page collapse
+  and a default `:80`/`:443` is dropped; leading `www.` stripped, fragment and
+  tracking parameters dropped, remaining parameters sorted, trailing slash
+  removed), Reciprocal Rank
   Fusion scoring (`k = 60`) with source-count / best-rank / chain-order
   tie-breaks, per-row title and URL from the best-ranked occurrence, longest
   non-empty snippet, first non-empty `published`/`site` in chain order, and a
@@ -28,8 +30,10 @@ All notable changes to this project. Format: Keep a Changelog; versioning: SemVe
   per queried provider with `ok` + `results`/`latency_ms`, `error:<msg>`,
   `skipped:not_configured`, `skipped:fanout` for eligible chain members beyond N,
   `skipped:grace` or `skipped:deadline`, and
-  `list_providers` reports `search_mode` plus `fanout: {n, grace_s}`.
-- **Tests** (`tests/unit/test_fanout.py`, 52 cases, no network): mode selection
+  `list_providers` reports `search_mode` plus `fanout: {n, grace_s}`. Success
+  needs one provider to answer OK, not one hit: an all-empty answer set is a
+  successful empty result, as in failover.
+- **Tests** (`tests/unit/test_fanout.py`, 61 cases, no network): mode selection
   from env and per call, invalid values, N clamping, `not_configured` skipping
   that does not consume a slot, real concurrency with sleeping stubs, grace
   cut-off, deadline enforcement, one provider failing while others succeed, all
