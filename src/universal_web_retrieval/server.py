@@ -73,9 +73,10 @@ def _json(payload) -> str:
 @app.tool(name="web_search", description=(
     "Web search through a configurable provider chain with automatic failover. "
     "Two modes: `mode=\"failover\"` (default) walks the chain one provider at a time "
-    "and returns the first success; `mode=\"fanout\"` queries up to UWR_SEARCH_FANOUT "
-    "providers concurrently, then merges and rank-fuses the results (provider="
-    "\"fanout\", every row carries `sources`; costs N× provider quota per search). "
+    "and returns the first success (including an empty answer); `mode=\"fanout\"` queries up to UWR_SEARCH_FANOUT "
+    "providers concurrently, then merges and rank-fuses the results (even an all-empty "
+    "set of OK answers succeeds with `results: []`; provider=\"fanout\", every row "
+    "carries `sources`; costs N× provider quota per search). "
     "Default chain: AnySearch -> Tavily -> DDGS; operators can reorder/extend it "
     "with UWR_SEARCH_CHAIN (e.g. anysearch,tavily,yuanbao,bocha,deepseek,kimi,ddgs) "
     "and pick the default mode with UWR_SEARCH_MODE. Auth is "

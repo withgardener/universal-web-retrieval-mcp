@@ -53,8 +53,21 @@ def dedupe_key(raw_url: str) -> str:
 
     scheme = parts.scheme.lower()
     if not scheme and not parts.netloc:
-        # Not an absolute URL: normalise the path-ish text only.
-        return url.lower().rstrip("/")
+        # Scheme-less authority form (``example.com/path``) should share the
+        # same key as its absolute URL variant. A relative path remains path-ish.
+        authority_text, separator, path_text = parts.path.partition("/")
+        if "." in authority_text or ":" in authority_text:
+            url = "//" + authority_text
+            if separator:
+                url += "/" + path_text
+            if parts.query:
+                url += "?" + parts.query
+            try:
+                parts = urlsplit(url)
+            except ValueError:
+                return url.lower()
+        else:
+            return url.lower().rstrip("/")
 
     # Use parsed hostname so IDNs have a stable ASCII representation and www.
     # is stripped from the host rather than from userinfo or a port suffix.

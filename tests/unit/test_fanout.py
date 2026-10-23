@@ -344,6 +344,26 @@ def test_a_record_finishing_after_the_window_is_not_merged(monkeypatch):
     assert [r_["sources"] for r_ in result.results] == [["prompt"]]
 
 
+def test_late_error_keeps_its_diagnostic_in_attempts(monkeypatch):
+    monkeypatch.setenv("UWR_SEARCH_MODE", "fanout")
+    monkeypatch.setenv("UWR_FANOUT_GRACE", "0.2")
+    clock = SkewedClock()
+    monkeypatch.setattr(router_module, "time", clock)
+
+    class LateErrorProvider(StubProvider):
+        def search(self, query, limit, timeout_override=None):
+            time.sleep(0.05)
+            clock.skew += 10.0
+            raise ProviderError("late diagnostic")
+
+    prompt = StubProvider("prompt", delay=0.005)
+    late_error = LateErrorProvider("late_error")
+    result = router_with(prompt, late_error).search("q", 5)
+    assert [attempt["outcome"] for attempt in result.attempts] == [
+        "ok", "error:late diagnostic"]
+    assert [hit["sources"] for hit in result.results] == [["prompt"]]
+
+
 # ---------------------------------------------------------------- deadline
 def test_deadline_already_passed_skips_without_calling(monkeypatch):
     monkeypatch.setenv("UWR_SEARCH_MODE", "fanout")
@@ -510,6 +530,11 @@ def test_dedupe_key_keeps_meaningful_differences():
     ("http://www.example.com/a/", "https://example.com/a"),
     ("https://example.com:443/a", "https://example.com/a"),
     ("http://example.com:80/a", "http://example.com/a"),
+    ("ftp://example.com/a", "https://example.com/a"),
+    ("//example.com/a", "https://example.com/a"),
+    ("example.com/a", "https://example.com/a"),
+    ("example.com?x=1", "https://example.com/?x=1"),
+    ("HTTPS://X:443/a", "https://x/a"),
 ])
 def test_dedupe_key_ignores_scheme_and_default_ports(left, right):
     assert dedupe_key(left) == dedupe_key(right)

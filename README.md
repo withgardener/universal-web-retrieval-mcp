@@ -308,8 +308,8 @@ Every one of those links is either free or priced per call (see the table below)
 
 | Mode | Behaviour | Cost per search |
 |---|---|---|
-| `failover` (default) | Walks the chain in order; the first provider that returns results wins | one provider call |
-| `fanout` | Queries the first N eligible providers **concurrently**, waits `UWR_FANOUT_GRACE` seconds for stragglers once the first one answers, then merges and rank-fuses everything that arrived | N provider calls |
+| `failover` (default) | Walks the chain in order; the first provider that returns OK wins, even with no hits | one provider call |
+| `fanout` | Queries the first N eligible providers **concurrently**, waits `UWR_FANOUT_GRACE` seconds for stragglers once the first non-empty answer arrives, then merges and rank-fuses everything that arrived | N provider calls |
 
 The trade-off: fan-out spends **N× provider quota per search**, and its latency is
 bounded by the grace window (at most `UWR_FANOUT_GRACE` seconds more than the
@@ -369,8 +369,7 @@ Fan-out responses set `provider: "fanout"` and `mode` to the shared auth mode of
 the answering providers, or `"mixed"` when they differ. `attempts` carries one
 entry per queried provider: `ok` (plus `results` and `latency_ms`),
 `error:<msg>`, `skipped:not_configured`, `skipped:fanout` (beyond the N-provider
-cutoff), `skipped:grace` (still running when the
-grace window closed — its result is discarded) or `skipped:deadline`. Success
+cutoff), `skipped:grace` (a late successful answer is discarded; a late error stays visible) or `skipped:deadline`. Success
 requires at least one provider to answer OK, not at least one hit: if every
 answering provider returns an empty list, the response is a success with
 `results: []` and `ok` / `results: 0` entries in `attempts` — the same thing

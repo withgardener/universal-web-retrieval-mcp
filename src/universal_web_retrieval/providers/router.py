@@ -311,8 +311,9 @@ class ProviderRouter:
         Success needs at least one provider to answer OK (as in failover): if
         every OK answer is empty, the call succeeds with ``results=[]``. Only
         "no provider answered OK" raises. A record is judged by its own finish
-        time, so a late arrival after the window is skipped even if the collector
-        happened to drain it afterwards.
+        time, so a late successful answer after the grace window (or deadline)
+        is skipped even if the collector happened to drain it afterwards. Late
+        errors remain visible in the attempt trail for diagnosis.
         """
         chain = self.chain(Capability.SEARCH, providers)   # may raise InvalidInputError
         if deadline is None:
@@ -440,7 +441,8 @@ class ProviderRouter:
             for name, record in arrived:
                 received += 1
                 records[name] = record
-                if record["outcome"] == "ok" and record["results"]:
+                if (record["outcome"] == "ok" and record["results"]
+                        and record["finished_at"] <= deadline):
                     finished = record["finished_at"]
                     if first_ok_at is None or finished < first_ok_at:
                         first_ok_at = finished
@@ -470,7 +472,10 @@ class ProviderRouter:
         late_reason = _stop_reason(deadline, first_ok_at, grace)
         for name, record in list(records.items()):
             finished = record.get("finished_at")
-            if finished is not None and finished > cut_off:
+            # Late successful answers are excluded from the merge. Preserve late
+            # errors in the attempt trail: they are diagnostic and never merge.
+            if (record.get("outcome") == "ok" and finished is not None
+                    and finished > cut_off):
                 records[name] = {"outcome": f"skipped:{late_reason}"}
 
         answered = [provider.NAME for provider in planned
