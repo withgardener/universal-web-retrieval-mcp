@@ -449,7 +449,7 @@ In `~/.hermes/config.yaml`:
 ```yaml
 mcp_servers:
   universal-web-retrieval:
-    command: /root/.local/bin/uvx
+    command: /home/hermes/.local/bin/uvx
     args: ["uwr"]
     transport: stdio
     enabled: true
