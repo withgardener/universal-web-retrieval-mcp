@@ -48,6 +48,7 @@ from .. import config
 from ..errors import (AuthMode, Capability, InvalidInputError, Provider, ProviderError,
                       SearchResult, FetchResult)
 from ..fanout import merge_results
+from ..redact import scrub_diagnostic
 from . import registry as _registry
 
 log = logging.getLogger("universal_web_retrieval.router")
@@ -302,8 +303,11 @@ class ProviderRouter:
                 errors.append(f"{name}({provider.mode().value}): {str(exc)[:150]}")
                 if exc.auth_failure:
                     # Loud, non-suppressible: the user's key is misconfigured.
+                    # Scrubbed: a provider that echoes the request must never
+                    # put the key into the log.
                     log.error("AUTH FAILURE on %s (mode=%s): %s — check the configured API key",
-                              name, provider.mode().value, str(exc)[:200])
+                              name, provider.mode().value,
+                              scrub_diagnostic(str(exc))[:200])
                 if not exc.fallback_eligible:
                     break
             except Exception as exc:  # noqa: BLE001 — unknown errors are still chain-eligible
@@ -483,7 +487,7 @@ class ProviderRouter:
                 # Loud, non-suppressible: the user's key is misconfigured.
                 log.error("AUTH FAILURE on %s (mode=%s): %s — check the configured API key",
                           provider.NAME, _mode_name(record.get("mode")),
-                          str(record.get("error", ""))[:200])
+                          scrub_diagnostic(str(record.get("error", "")))[:200])
 
         # The window closed at ``min(deadline, first_ok_at + grace)``. A record
         # can reach the queue after that instant and still be picked up by the

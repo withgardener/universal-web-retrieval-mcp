@@ -10,8 +10,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
-import re
 import sys
 import time
 
@@ -22,6 +20,7 @@ from .config import max_results_cap as _max_results_cap
 from .errors import Capability, InvalidInputError, ProviderError
 from .providers import registry as provider_registry
 from .providers.router import ProviderRouter
+from .redact import scrub_diagnostic, scrub_exact_secrets, scrub_payload
 
 logging.basicConfig(level=getattr(logging, config.log_level(), logging.WARNING),
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -29,28 +28,24 @@ logging.basicConfig(level=getattr(logging, config.log_level(), logging.WARNING),
 
 router = ProviderRouter()
 
-_URL_SECRET_RE = re.compile(r"(?i)([?&](?:token|api_key|apikey|key|secret|password|sig|signature|access_token)=)[^&\s]+")
-_PROVIDER_KEY_RE = re.compile(
-    r"(?i)\b(YUANBAO_API_KEY|WSA_API_KEY|BOCHA_API_KEY|DEEPSEEK_API_KEY|"
-    r"MOONSHOT_API_KEY|KIMI_API_KEY|ZHIPU_API_KEY|BIGMODEL_API_KEY|"
-    r"BRAVE_API_KEY|JINA_API_KEY)(\s*[=:]\s*)([^\s,;]+)"
-)
+
+def _json(payload) -> str:
+    """Serialise a tool payload without breaking successful content.
+
+    Diagnostic fields (``error``, ``attempts`` outcomes) are scrubbed
+    structurally; after serialisation only *configured credential values* are
+    removed from the whole document. Credential-looking query parameters are
+    NOT rewritten here: a successful payload's signed URLs must keep working
+    (see ``redact`` for the trust boundary).
+    """
+    return scrub_exact_secrets(json.dumps(scrub_payload(payload),
+                                          ensure_ascii=False, indent=2))
 
 
-def _redact_secrets(text: str) -> str:
-    """Redact configured provider keys and credential-looking URL parameters."""
-    for env_name in (
-        "ANYSEARCH_API_KEY", "TAVILY_API_KEY", "YUANBAO_API_KEY", "WSA_API_KEY",
-        "BOCHA_API_KEY", "DEEPSEEK_API_KEY", "MOONSHOT_API_KEY", "KIMI_API_KEY",
-        "ZHIPU_API_KEY", "BIGMODEL_API_KEY", "BRAVE_API_KEY", "JINA_API_KEY",
-    ):
-        secret = os.environ.get(env_name, "")
-        if secret:
-            secret_pattern = re.compile(
-                r"(?<![A-Za-z0-9_])" + re.escape(secret) + r"(?![A-Za-z0-9_])")
-            text = secret_pattern.sub("[REDACTED]", text)
-    text = _PROVIDER_KEY_RE.sub(r"\1\2[REDACTED]", text)
-    return _URL_SECRET_RE.sub(r"\1<redacted>", text)
+# Backwards-compatible name: the diagnostic scrubber (also used by the router's
+# log lines). Kept because callers and tests referenced it before 0.3.1.
+_redact_secrets = scrub_diagnostic
+
 MAX_RESULTS_CAP = _max_results_cap()
 
 from . import __version__
@@ -63,11 +58,6 @@ app = MCPServer(
                  "DDGS, Tencent Yuanbao Search, Bocha, DeepSeek, Kimi, Zhipu, Brave, "
                  "Jina Reader) with automatic failover."),
 )
-
-
-def _json(payload) -> str:
-    """Serialize and scrub credential-looking query params from any error text."""
-    return _redact_secrets(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
 @app.tool(name="web_search", description=(
