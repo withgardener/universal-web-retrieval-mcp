@@ -42,3 +42,22 @@ Hermes applies this policy via:
   (native web toolset not exposed), `mcp_servers.universal-web-retrieval` (the server).
 
 No Hermes core source changes are involved — configuration and instruction files only.
+
+## URLs that carry credentials
+
+`web_fetch` returns the caller's URL **verbatim** in each result's `url` field,
+on success and on failure, so the link stays usable. A credential inside that URL
+(`?token=`, `?sig=`, `?api_key=`, a presigned `?X-Amz-Signature=`) therefore
+comes back in cleartext: redaction covers `error`/`attempts` diagnostics only, and
+it is not a confidentiality guarantee.
+
+The payload becomes part of the conversation, so that URL may be recorded in
+session transcripts or chat logs and sent to the model provider serving the
+conversation. When a user hands you a URL with an embedded credential:
+
+1. say that fetching it puts the credential into the conversation record;
+2. prefer a short-lived signed link and treat it as spent once fetched;
+3. never move a long-lived secret into a query parameter to "just fetch" a page;
+4. if the credential is long-lived or the user did not intend to share it, ask
+   before fetching rather than fetching and reporting afterwards.
+

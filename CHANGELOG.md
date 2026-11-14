@@ -108,6 +108,22 @@ fetches stay allowed, the block stays opt-in, and interstitial detection stays o
   connects and verifies the peer address can claim that; network isolation
   (container, netns, egress firewall, provider deny-list) remains the outer
   boundary for untrusted input.
+- **A URL you pass to `web_fetch` comes back verbatim — credentials included.**
+  Every result entry echoes the caller's URL in the top-level `url` field, on
+  success *and* on failure, so the returned link is the link that was asked for.
+  That is the deliberate other half of the redaction split above: rewriting `url`
+  would hand back a link that no longer works. Consequence, now stated in the
+  README, the `web_fetch` tool description and `docs/agent-tool-policy.md`: a
+  credential embedded in the URL (`?token=`, `?sig=`, `?api_key=`,
+  `?X-Amz-Signature=`) is returned in cleartext; scrubbing applies to `error` and
+  `attempts`, never to `url` or page `content`, and the only rewrite a `url` can
+  get is an exact match for a provider key configured in that process. The
+  payload enters the calling agent's conversation and from there may be recorded
+  in session transcripts or chat logs and reach the model provider serving that
+  conversation. So: prefer short-lived signed URLs and revoke them after the
+  fetch. Diagnostic redaction is **not a confidentiality guarantee** for a
+  user-supplied URL, and it cannot undo a disclosure that already happened.
+  Behaviour is unchanged by this note — the `url` field never was scrubbed.
 
 ### Changed
 
@@ -120,14 +136,18 @@ fetches stay allowed, the block stays opt-in, and interstitial detection stays o
   chains, provider order, timeouts and the failover payload shape are unchanged
   (the 0.3.0 golden test still passes as-is).
 - Tests: offline suites `test_031_empty_answers.py`, `test_031_fetch_content.py`,
-  `test_031_redaction.py`, `test_031_budget.py` and `test_031_netguard.py` pin the
+  `test_031_redaction.py`, `test_031_budget.py`, `test_031_netguard.py` and
+  `test_031_url_privacy.py` pin the
   new rules — empty versus malformed containers, truncation reporting, the
   interstitial shapes that used to be false positives (a "CAPTCHA help" page, a
   vendor glossary, an FAQ quoting "Just a moment…", a doc showing one
   `cf_chl_opt` sample, and a help page titled "Access Denied: a practical guide
   to 403 responses"), the default and opt-in netguard paths (legacy numeric
   spellings, zone ids, loopback names, resolver timeout, per-URL tool error,
-  redirect fail-closed) and a docs test that rejects SSRF overclaiming.
+  redirect fail-closed), a docs test that rejects SSRF overclaiming, and the
+  caller-URL echo (verbatim on every result path, diagnostics still scrubbed,
+  with the privacy paragraph required in README, CHANGELOG, the policy doc and
+  the served tool description).
   `tests/conftest.py` clears `WEB_RETRIEVAL_*` and stubs `netguard._resolve`, so
   the offline suite never touches DNS; the live-provider file stays skipped
   unless it is explicitly enabled.

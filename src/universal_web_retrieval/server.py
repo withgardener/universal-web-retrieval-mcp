@@ -108,7 +108,15 @@ def web_search_tool(query: str, limit: int = 5, providers: list[str] | None = No
     "default; with WEB_RETRIEVAL_BLOCK_PRIVATE=1 they are refused instead. That "
     "opt-in check is a target heuristic, not SSRF protection (no protection "
     "against DNS rebinding or a redirect hop at the provider). Note: JS-rendered, "
-    "login-walled or CAPTCHA-protected pages are not guaranteed."))
+    "login-walled or CAPTCHA-protected pages are not guaranteed. PRIVACY: each "
+    "entry echoes the caller's URL verbatim in `url`, on success and on failure, "
+    "so the link stays usable — a credential inside that URL (`?token=`, `?sig=`, "
+    "`?api_key=`) is therefore returned in cleartext, not scrubbed (only an exact "
+    "value of a provider key configured here is still stripped). `error` and "
+    "`attempts` are scrubbed; `url` and `content` are not. The payload enters this "
+    "conversation and may be recorded in session transcripts or chat logs and sent "
+    "to the model provider serving it. Prefer short-lived signed URLs and revoke "
+    "them after the fetch; redaction is not a confidentiality guarantee."))
 def web_fetch_tool(url: str = "", urls: list[str] | None = None,
                    providers: list[str] | None = None) -> str:
     raw = [u for u in ([url] if url else []) + list(urls or []) if u]
