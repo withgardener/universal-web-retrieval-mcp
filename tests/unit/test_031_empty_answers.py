@@ -197,6 +197,91 @@ def test_provider_error_envelope_is_still_an_error(monkeypatch):
             ZhipuProvider().search("q", 5)
 
 
+# ------------------------------------------------- null is malformed, not empty
+def test_result_container_null_is_malformed():
+    """JSON ``null`` is a broken reply, not an honest empty answer.
+
+    ``null`` is what a gateway error page, a truncated body or a schema change
+    serialises to; treating it as ``results: []`` told the caller "the web has
+    nothing for this query" about a reply that said nothing at all.
+    """
+    from universal_web_retrieval.errors import result_container
+
+    with pytest.raises(ProviderError) as exc:
+        result_container({"results": None}, "results", provider="p")
+    assert "malformed" in str(exc.value)
+    assert "null" in str(exc.value)
+
+
+def test_result_container_whole_payload_null_is_malformed():
+    from universal_web_retrieval.errors import result_container
+
+    with pytest.raises(ProviderError):
+        result_container(None, "results", provider="p")
+
+
+def test_result_container_missing_key_is_still_malformed():
+    from universal_web_retrieval.errors import result_container
+
+    with pytest.raises(ProviderError) as exc:
+        result_container({}, "results", provider="p")
+    assert "malformed" in str(exc.value)
+
+
+def test_result_container_empty_list_is_still_an_answer():
+    from universal_web_retrieval.errors import result_container
+
+    assert result_container({"results": []}, "results", provider="p") == []
+
+
+@pytest.mark.parametrize("factory,payload", [
+    (_anysearch, {"code": 0, "data": {"results": None}}),
+    (_tavily, {"results": None}),
+    (_bocha, {"code": 200, "data": {"webPages": {"value": None}}}),
+    (_deepseek, {"results": None}),
+    (_kimi, {"search_results": None}),
+    (_zhipu, {"search_result": None}),
+    (_brave, {"web": {"results": None}}),
+])
+def test_provider_null_container_is_malformed_not_an_empty_answer(factory, payload,
+                                                                 monkeypatch):
+    """Every provider reports a null container as a malformed reply."""
+    import unittest.mock as mock
+
+    provider, patch_target, _ignored = factory(monkeypatch)
+    with mock.patch(patch_target, return_value=_Resp(payload)):
+        with pytest.raises(ProviderError) as exc:
+            provider.search("q", 5)
+    assert "malformed" in str(exc.value), str(exc.value)
+
+
+def test_yuanbao_null_pages_is_malformed_not_an_empty_answer(monkeypatch):
+    """An explicit ``"Pages": null`` is a broken reply; an absent key is not."""
+    from universal_web_retrieval.providers.yuanbao import YuanbaoProvider
+    monkeypatch.setenv("WSA_API_KEY", "k")
+    provider = YuanbaoProvider()
+    provider._call_tool = lambda arguments, timeout, _p=provider: {
+        "content": [{"type": "text",
+                     "text": json.dumps({"Response": {"Pages": None}})}],
+        "isError": False,
+    }
+    with pytest.raises(ProviderError) as exc:
+        provider.search("q", 5)
+    assert "malformed" in str(exc.value)
+
+
+def test_tavily_extract_null_results_is_malformed(monkeypatch):
+    """The extract container follows the same rule as the search container."""
+    import unittest.mock as mock
+    from universal_web_retrieval.providers.tavily import TavilyProvider
+
+    with mock.patch("universal_web_retrieval.providers.tavily.httpx.post",
+                    return_value=_Resp({"results": None})):
+        with pytest.raises(ProviderError) as exc:
+            TavilyProvider().fetch("https://x")
+    assert "malformed" in str(exc.value)
+
+
 # ---------------------------------------------------------------- failover
 def test_empty_answer_does_not_stop_the_failover_walk():
     empty = StubProvider("empty")

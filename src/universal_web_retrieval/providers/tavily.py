@@ -58,7 +58,9 @@ class TavilyProvider(Provider):
                 raise classify_http_error(resp.status_code, resp.text,
                                           authenticated=(self.mode() == AuthMode.KEYED))
             data = resp.json()
-            results = data.get("results", [])
+            # Same rule as search: a missing or null container is a malformed
+            # reply, an empty list is an extraction failure with a reason.
+            results = result_container(data, "results", provider=self.NAME)
             if not results:
                 failed = data.get("failed_results", []) or data.get("failed_urls", [])
                 msg = str(failed[0].get("error", "extraction failed")) if failed else "no results"

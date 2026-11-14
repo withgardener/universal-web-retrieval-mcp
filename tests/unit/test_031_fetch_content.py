@@ -10,9 +10,10 @@ Two separate promises, deliberately kept apart:
   gets a Cloudflare/Akamai/captcha interstitial back would hand the caller
   "Just a moment..." as if it were the article. Such a page raises a
   fallback-eligible error so the chain tries the next provider. Detection needs
-  a marker *combination* (title marker + body marker, or several body markers)
-  inside a short page — a long article that merely mentions "captcha", or a
-  short page saying "not found", is never treated as a block.
+  a *combination*: two distinct technical fingerprints, or a challenge title
+  plus one marker, inside a short page. A single word is never enough, so a long
+  article that merely mentions "captcha", a short help page titled "CAPTCHA
+  help", a vendor glossary or an FAQ quoting "Just a moment..." stays content.
 
 Everything here is offline: provider transports are stubbed.
 """
@@ -46,6 +47,31 @@ AKAMAI_PAGE = {
 BENIGN_SHORT = {
     "title": "Login help",
     "body": "We use a captcha on the login page to stop automated sign-ups.",
+}
+
+# A help page whose TITLE carries the word — the shape that used to be killed:
+# "captcha" was a title marker, so any short help page about captchas matched
+# title marker + body marker and was reported as a block wall.
+CAPTCHA_HELP = {
+    "title": "CAPTCHA help",
+    "body": ("A CAPTCHA is a test that tells humans and bots apart. If the "
+             "challenge does not load, reload the page or use another browser."),
+}
+
+# A reference page that names several vendors. Three distinct markers used to be
+# enough on its own, so a short glossary was indistinguishable from a wall.
+CAPTCHA_DOCS = {
+    "title": "CAPTCHA types explained",
+    "body": ("Common challenge providers: reCAPTCHA, hCaptcha and Cloudflare "
+             "Turnstile. All three ask the visitor for a captcha answer."),
+}
+
+# A help page that quotes the interstitial text it explains.
+FAQ_QUOTING_WALL = {
+    "title": "What does “Just a moment…” mean?",
+    "body": ("Sometimes a site answers with “Just a moment...” and a browser "
+             "check before showing the article. It usually clears in a few "
+             "seconds; if it does not, allow JavaScript and cookies."),
 }
 
 LONG_ARTICLE = {
@@ -94,6 +120,52 @@ def test_akamai_denial_is_detected():
 
 def test_short_page_mentioning_captcha_once_is_not_a_block():
     assert challenge_reason(BENIGN_SHORT["title"], BENIGN_SHORT["body"]) == ""
+
+
+def test_short_help_page_titled_with_captcha_is_not_a_block():
+    """The false positive the review found: the title word alone used to count.
+
+    ``CAPTCHA help`` does not name a challenge page, and the body merely
+    explains the term, so the page must be returned as content.
+    """
+    assert challenge_reason(CAPTCHA_HELP["title"], CAPTCHA_HELP["body"]) == ""
+
+
+def test_docs_listing_several_captcha_vendors_is_not_a_block():
+    """Three vendor names in a glossary are documentation, not three wall markers."""
+    assert challenge_reason(CAPTCHA_DOCS["title"], CAPTCHA_DOCS["body"]) == ""
+
+
+def test_short_faq_quoting_an_interstitial_is_not_a_block():
+    """Quoted wall text without the title fingerprint of a wall is content."""
+    assert challenge_reason(FAQ_QUOTING_WALL["title"], FAQ_QUOTING_WALL["body"]) == ""
+
+
+def test_challenge_title_alone_is_not_enough():
+    """A title is evidence only together with a marker in the body."""
+    assert challenge_reason("Just a moment...", "Article body goes here.") == ""
+
+
+def test_single_technical_fingerprint_in_a_short_doc_is_not_a_block():
+    """A code sample mentioning ``cf_chl_opt`` once is documentation."""
+    body = ("Cloudflare sets the cf_chl_opt cookie while a challenge is being "
+            "solved. Clear it to retry the challenge.")
+    assert challenge_reason("Cookie reference", body) == ""
+
+
+def test_two_technical_fingerprints_block_even_without_a_title():
+    """A real wall is recognisable from its own machinery, title or not."""
+    body = ("Checking your browser before accessing example.com. "
+            "Enable JavaScript and cookies to continue.")
+    assert challenge_reason("", body)
+
+
+def test_waf_titles_with_a_site_suffix_still_block():
+    """A real denial page keeps its own suffix after the challenge title."""
+    assert challenge_reason("Sucuri WebSite Firewall - Access Denied",
+                            "Sucuri website firewall blocked this request.")
+    assert challenge_reason("Access Denied - example.com",
+                            "Reference #18.2f3d4c17")
 
 
 def test_long_article_mentioning_block_hardware_is_not_a_block():

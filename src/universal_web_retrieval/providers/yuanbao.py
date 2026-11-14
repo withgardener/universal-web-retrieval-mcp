@@ -119,22 +119,41 @@ def _unwrap(payload: Any) -> Dict[str, Any]:
 
 
 def _pages(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Pull ``Pages`` out of the payload, decoding the per-item JSON strings."""
-    raw = payload.get("Pages")
-    if raw is None:
-        for alt in ("pages", "Results", "results", "Data", "data"):
-            if isinstance(payload.get(alt), (list,)):
-                raw = payload[alt]
-                break
+    """Pull ``Pages`` out of the payload, decoding the per-item JSON strings.
+
+    An absent container means "nothing to say" and yields an empty answer. An
+    explicit ``null`` is a broken reply and raises — see
+    ``errors.result_container`` for the same rule.
+    """
+    container_keys = ("Pages", "pages", "Results", "results", "Data", "data")
+    raw = None
+    for key in container_keys:
+        if key not in payload:
+            continue
+        value = payload[key]
+        primary = key in ("Pages", "pages")
+        if isinstance(value, list):
+            raw = value
+            break
+        if isinstance(value, str):
+            raw = value
+            break
+        if primary:
+            # An explicit null (or a non-list) in the documented container is a
+            # broken reply, never an honest empty answer.
+            raise ProviderError(
+                f"yuanbao: malformed response ({key} is "
+                f"{'null' if value is None else type(value).__name__}, not a list)")
     if raw is None:
         return []
     if isinstance(raw, str):
         try:
             raw = json.loads(raw)
         except ValueError:
-            return []
+            raise ProviderError("yuanbao: malformed response (Pages is not JSON)")
     if not isinstance(raw, list):
-        return []
+        raise ProviderError(
+            f"yuanbao: malformed response (Pages is {type(raw).__name__}, not a list)")
     out: List[Dict[str, Any]] = []
     for item in raw:
         if isinstance(item, dict):

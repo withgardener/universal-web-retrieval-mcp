@@ -248,6 +248,22 @@ def log_level() -> str:
     return os.environ.get("WEB_RETRIEVAL_LOG_LEVEL", "WARNING").upper()
 
 
+DEFAULT_NETGUARD_DNS_TIMEOUT = 2.0
+
+
+def netguard_dns_timeout() -> float:
+    """``WEB_RETRIEVAL_NETGUARD_DNS_TIMEOUT``: seconds the opt-in pre-flight DNS
+    lookup may take before the target is refused.
+
+    Only used when ``WEB_RETRIEVAL_BLOCK_PRIVATE=1``. ``2`` s is generous for a
+    healthy resolver and short enough that a stalled lookup cannot hold a tool
+    call; a value that is not a positive number falls back to the default.
+    """
+    value = _float_env("WEB_RETRIEVAL_NETGUARD_DNS_TIMEOUT",
+                       DEFAULT_NETGUARD_DNS_TIMEOUT)
+    return value if value > 0 else DEFAULT_NETGUARD_DNS_TIMEOUT
+
+
 def _csv_env(name: str) -> List[str]:
     """Parse a comma-separated env var into lower-case, de-duplicated names.
 

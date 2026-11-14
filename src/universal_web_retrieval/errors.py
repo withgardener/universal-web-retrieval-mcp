@@ -68,9 +68,13 @@ def result_container(payload: Any, *path: str, provider: str) -> list:
 
     * the container is **missing** (schema change, gateway error page, truncated
       JSON) -> malformed reply -> ``ProviderError``;
-    * the container is present and **empty** -> the provider honestly found
+    * the container is **present and empty** -> the provider honestly found
       nothing -> an empty *answer*, returned to the caller so the router can
-      report ``empty`` instead of ``all providers failed``.
+      report ``empty`` instead of ``all providers failed``;
+    * the container is **present and ``null``** -> malformed reply, NOT an empty
+      answer: JSON ``null`` is what a broken envelope, an error page rendered as
+      JSON or a truncated body serialises to, and reporting it as "no results"
+      told the caller the web had nothing for the query.
 
     ``path`` is the key chain to the list, e.g. ``("data", "results")``.
     """
@@ -81,7 +85,8 @@ def result_container(payload: Any, *path: str, provider: str) -> list:
                 f"{provider}: malformed response (missing {'/'.join(path)})")
         node = node[key]
     if node is None:
-        return []
+        raise ProviderError(
+            f"{provider}: malformed response ({'/'.join(path)} is null, not a list)")
     if not isinstance(node, list):
         raise ProviderError(
             f"{provider}: malformed response ({'/'.join(path)} is "

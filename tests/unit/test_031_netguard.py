@@ -8,20 +8,24 @@ behind ``WEB_RETRIEVAL_BLOCK_PRIVATE=1`` — the name README has promised since
 
 What the check can prove, and only that:
 
-* an **IP literal** (bracketed IPv6, IPv4-mapped IPv6, decimal ``2130706433``)
+* an **IP literal** (bracketed IPv6, IPv4-mapped IPv6, decimal ``2130706433``,
+  legacy dotted shorthands such as ``127.1``/``0x7f.0.0.1``, an IPv6 zone id)
   is decided exactly, with no DNS;
 * a **hostname** is resolved through the platform resolver (so ``/etc/hosts``,
   systemd-resolved and host-level controls still apply) and rejected when ANY
   returned address is non-public — mixed answers included;
-* a hostname that does not resolve here is allowed and logged, because the
-  fetch happens at the provider and our resolver's failure proves nothing.
+* a lookup that does not answer inside ``WEB_RETRIEVAL_NETGUARD_DNS_TIMEOUT``
+  is refused, not waited out and not allowed;
+* a hostname that definitively does not resolve here is allowed and logged,
+  because the fetch happens at the provider and our NXDOMAIN proves nothing.
 
 What it cannot prove, and is therefore never claimed: the fetch runs on the
 provider's network, so there is no connection binding. A redirect hop is only
-re-checked after it happened, and DNS rebinding between our check and the
-provider's connect cannot be excluded. Network isolation stays the outer
-boundary. These tests pin the honest version: no test asserts SSRF protection,
-and ``test_docs_do_not_overclaim`` refuses that wording in the docs.
+re-checked after it happened, DNS rebinding between our check and the
+provider's connect cannot be excluded, and the answer is only as good as this
+host's resolver. Network isolation stays the outer boundary. These tests pin the
+honest version: no test asserts SSRF protection, and
+``test_docs_do_not_overclaim`` refuses that wording in the docs.
 """
 from __future__ import annotations
 
@@ -173,13 +177,9 @@ def test_public_ip_literal_is_allowed_when_blocking(monkeypatch):
 
 
 def test_decimal_ipv4_literal_is_rejected_when_blocking(monkeypatch):
-    """2130706433 == 127.0.0.1; the platform resolver turns it into that."""
+    """2130706433 == 127.0.0.1 and is decided without asking a resolver."""
     monkeypatch.setenv("WEB_RETRIEVAL_BLOCK_PRIVATE", "1")
-
-    def fake(host, port):
-        assert host == "2130706433"
-        return ["127.0.0.1"]
-    monkeypatch.setattr(netguard, "_resolve", fake)
+    _no_dns(monkeypatch)
     with pytest.raises(InvalidInputError):
         netguard.check_url("http://2130706433/")
 
@@ -301,6 +301,101 @@ def test_web_fetch_tool_still_fetches_private_urls_by_default(monkeypatch):
 
 
 # ------------------------------------------------------------------------ docs
+def test_legacy_numeric_ipv4_forms_are_decided_without_dns(monkeypatch):
+    """``127.1``, ``0177.0.0.1`` and ``0x7f.0.0.1`` are the same private host.
+
+    ``ipaddress.ip_address`` rejects those dotted shorthands, so they used to
+    fall through to the resolver; an internal resolver that answers differently
+    (or not at all) left the check skippable. They are decoded here instead.
+    """
+    monkeypatch.setenv("WEB_RETRIEVAL_BLOCK_PRIVATE", "1")
+    _no_dns(monkeypatch)
+    for url in ("http://127.1/", "http://0177.0.0.1/", "http://0x7f.0.0.1/",
+                "http://0x7f000001/", "http://127.0.0.1./"):
+        with pytest.raises(InvalidInputError):
+            netguard.check_url(url)
+
+
+def test_legacy_numeric_forms_of_a_public_host_are_allowed(monkeypatch):
+    """The numeric forms are decoded, not blanket-rejected."""
+    monkeypatch.setenv("WEB_RETRIEVAL_BLOCK_PRIVATE", "1")
+    _no_dns(monkeypatch)
+    for url in ("http://93.184.216.34/", "http://0x5db8d822/", "http://1500000000/"):
+        netguard.check_url(url)
+
+
+def test_ipv6_zone_id_literal_is_decided(monkeypatch):
+    """``[fe80::1%25eth0]`` is a link-local literal, not an unknown hostname."""
+    monkeypatch.setenv("WEB_RETRIEVAL_BLOCK_PRIVATE", "1")
+    _no_dns(monkeypatch)
+    with pytest.raises(InvalidInputError):
+        netguard.check_url("http://[fe80::1%25eth0]/")
+    netguard.check_url("http://[2606:2800:220:1:248:1893:25c8:1946]/")
+
+
+def test_undecodable_numeric_host_is_refused_conservatively(monkeypatch):
+    """A host made only of digits and dots cannot be a domain; refuse it."""
+    monkeypatch.setenv("WEB_RETRIEVAL_BLOCK_PRIVATE", "1")
+    _no_dns(monkeypatch)
+    for url in ("http://1.2.3.4.5/", "http://09.1.1.1/", "http://999.1.1.1/"):
+        with pytest.raises(InvalidInputError):
+            netguard.check_url(url)
+
+
+def test_resolver_timeout_is_refused_instead_of_waited_out(monkeypatch):
+    """A hung resolver must not stall the call, and must not mean "allow"."""
+    import time
+
+    monkeypatch.setenv("WEB_RETRIEVAL_BLOCK_PRIVATE", "1")
+    monkeypatch.setenv("WEB_RETRIEVAL_NETGUARD_DNS_TIMEOUT", "0.2")
+
+    def slow(host, port):
+        time.sleep(5.0)
+        return [PUBLIC]
+
+    monkeypatch.setattr(netguard, "_resolve", slow)
+    started = time.monotonic()
+    with pytest.raises(InvalidInputError) as exc:
+        netguard.check_url("https://slow.example/a")
+    elapsed = time.monotonic() - started
+    assert elapsed < 1.5, f"the check waited {elapsed:.1f}s for a hung resolver"
+    message = str(exc.value)
+    assert "WEB_RETRIEVAL_NETGUARD_DNS_TIMEOUT" in message
+    assert "refused" in message.lower()
+
+
+def test_resolver_timeout_limit_is_configurable(monkeypatch):
+    monkeypatch.setenv("WEB_RETRIEVAL_NETGUARD_DNS_TIMEOUT", "0.5")
+    assert config.netguard_dns_timeout() == pytest.approx(0.5)
+    monkeypatch.setenv("WEB_RETRIEVAL_NETGUARD_DNS_TIMEOUT", "not-a-number")
+    assert config.netguard_dns_timeout() == pytest.approx(
+        config.DEFAULT_NETGUARD_DNS_TIMEOUT)
+    monkeypatch.delenv("WEB_RETRIEVAL_NETGUARD_DNS_TIMEOUT")
+    assert config.netguard_dns_timeout() == pytest.approx(
+        config.DEFAULT_NETGUARD_DNS_TIMEOUT)
+
+
+def test_default_path_still_allows_every_numeric_private_form(monkeypatch):
+    """Opt-in switch off: no parsing, no DNS, no rejection — unchanged."""
+    monkeypatch.delenv("WEB_RETRIEVAL_BLOCK_PRIVATE", raising=False)
+    _no_dns(monkeypatch)
+    for url in ("http://127.1/", "http://0x7f000001/", "http://[fe80::1%25eth0]/",
+                "http://2130706433/", "http://1.2.3.4.5/"):
+        netguard.check_url(url)
+
+
+def test_rejection_does_not_claim_absolute_protection(monkeypatch):
+    """The error names the real limits: it is a pre-flight heuristic."""
+    monkeypatch.setenv("WEB_RETRIEVAL_BLOCK_PRIVATE", "1")
+    with pytest.raises(InvalidInputError) as exc:
+        netguard.check_url("http://127.0.0.1/")
+    message = str(exc.value).lower()
+    assert "not ssrf protection" in message
+    for claim in ("prevents ssrf", "protects against ssrf", "guarantees",
+                  "fully blocks", "cannot be bypassed"):
+        assert claim not in message
+
+
 def test_docs_do_not_overclaim():
     """The check cannot stop DNS rebinding or a redirect hop; say so plainly."""
     readme = (REPO / "README.md").read_text(encoding="utf-8")
@@ -318,6 +413,10 @@ def test_docs_do_not_overclaim():
     assert "redirect" in lowered
     assert "network isolation" in lowered or "container/netns/firewall" in lowered
     assert "not ssrf protection" in lowered
+    # The newer limits must be stated where an operator reads them.
+    assert "WEB_RETRIEVAL_NETGUARD_DNS_TIMEOUT" in readme
+    assert "legacy" in lowered and ("numeric" in lowered or "shorthand" in lowered)
+    assert "resolver" in lowered and "timeout" in lowered
 
     for claim in ("prevents ssrf", "protects against ssrf", "blocks ssrf",
                   "ssrf-proof", "prevents dns rebinding", "full ssrf protection"):

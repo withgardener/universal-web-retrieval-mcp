@@ -139,6 +139,71 @@ def test_no_token_but_similar_words_survive():
     assert "attention=yes" in out["error"]
 
 
+# ------------------------------------------------- nested diagnostics
+def test_nested_error_mapping_is_scrubbed_recursively():
+    """A structured error envelope is diagnostic text at every depth.
+
+    Providers answer with ``{"error": {"code": …, "url": …, "raw": …}}``; only
+    the top-level string used to be walked, so a URL or a bearer token nested
+    one level down survived verbatim.
+    """
+    out = json.loads(server._json({
+        "success": False,
+        "error": {"code": 500,
+                  "url": "https://api.example/v1?token=SEKRET&x=1",
+                  "raw": "sent Authorization: Bearer sk-abcdef1234567890"},
+    }))
+    blob = json.dumps(out)
+    assert "SEKRET" not in blob
+    assert "sk-abcdef1234567890" not in blob
+    # Structure and non-string values are preserved: this is a scrub, not a
+    # rewrite of the envelope.
+    assert out["error"]["code"] == 500
+    assert isinstance(out["error"], dict)
+    assert "token=" in out["error"]["url"]        # the parameter name stays
+
+
+def test_nested_errors_list_is_scrubbed_recursively():
+    """``errors: [...]`` is a list, and a list of strings was left untouched."""
+    out = json.loads(server._json({
+        "success": False,
+        "errors": ["first: https://p.example/s?api_key=SEKRET",
+                   {"message": "second: https://q.example/?sig=TOPSECRET",
+                    "code": 429}],
+    }))
+    blob = json.dumps(out)
+    assert "SEKRET" not in blob
+    assert "TOPSECRET" not in blob
+    assert len(out["errors"]) == 2
+    assert out["errors"][1]["code"] == 429
+    assert "api_key=" in out["errors"][0]
+    assert "sig=" in out["errors"][1]["message"]
+
+
+def test_nested_error_never_leaks_a_configured_key(monkeypatch):
+    monkeypatch.setenv("ANYSEARCH_API_KEY", "as-live-0123456789")
+    out = json.loads(server._json({
+        "success": False,
+        "errors": [{"detail": "echo as-live-0123456789"},
+                   "plain as-live-0123456789"],
+    }))
+    blob = json.dumps(out)
+    assert "as-live-0123456789" not in blob
+    assert "[REDACTED]" in blob
+
+
+def test_success_rows_keep_signed_links_even_next_to_a_nested_error(monkeypatch):
+    """The diagnostic scrub is structural: success rows are still untouched."""
+    payload = {
+        "success": True,
+        "results": [{"title": "t", "url": SIGNED, "snippet": "s"}],
+        "error": {"url": "https://api.example/v1?token=SEKRET"},
+    }
+    out = json.loads(server._json(payload))
+    assert out["results"][0]["url"] == SIGNED
+    assert "SEKRET" not in json.dumps(out)
+
+
 # ---------------------------------------------------------------- tool + logs
 def test_web_fetch_tool_keeps_signed_urls(monkeypatch):
     result = FetchResult(url="https://example.com/a", content=f"![i]({SIGNED})",

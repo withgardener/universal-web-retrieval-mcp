@@ -92,26 +92,44 @@ def scrub_diagnostic(text: str) -> str:
     return _URL_CREDENTIAL_RE.sub(r"\1" + URL_REDACTED, out)
 
 
+def _scrub_diagnostic_tree(value: Any) -> Any:
+    """Apply ``scrub_diagnostic`` to every string inside ``value``, keeping shape.
+
+    Diagnostic fields are not always strings: providers answer with
+    ``{"error": {"code": …, "url": …}}`` or ``{"errors": ["…", {"message": …}]}``.
+    A nested envelope is still text *about a request*, so every string in it is
+    treated like a top-level error string — including keys that are not in
+    ``DIAGNOSTIC_KEYS``, because inside an ``error`` subtree the whole object is
+    diagnostic. Non-string scalars (codes, counts, booleans) are returned as-is.
+    """
+    if isinstance(value, str):
+        return scrub_diagnostic(value)
+    if isinstance(value, Mapping):
+        return {key: _scrub_diagnostic_tree(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_scrub_diagnostic_tree(item) for item in value]
+    return value
+
+
 def _scrub_attempt(attempt: Any) -> Any:
     if not isinstance(attempt, Mapping):
         return attempt
-    return {key: (scrub_diagnostic(value) if isinstance(value, str) else value)
-            for key, value in attempt.items()}
+    return {key: _scrub_diagnostic_tree(value) for key, value in attempt.items()}
 
 
 def scrub_payload(payload: Any) -> Any:
     """Return ``payload`` with diagnostic fields scrubbed, structure intact.
 
     Content, titles, URLs and result rows are left byte-for-byte alone; only
-    ``error``/``message``/… strings and the per-provider ``attempts`` trail are
-    rewritten. Exact-secret removal for the rest happens after serialisation so
-    it cannot be defeated by escaping.
+    ``error``/``message``/… subtrees (at any depth, list or mapping) and the
+    per-provider ``attempts`` trail are rewritten. Exact-secret removal for the
+    rest happens after serialisation so it cannot be defeated by escaping.
     """
     if isinstance(payload, Mapping):
         out: Dict[Any, Any] = {}
         for key, value in payload.items():
-            if isinstance(key, str) and key in DIAGNOSTIC_KEYS and isinstance(value, str):
-                out[key] = scrub_diagnostic(value)
+            if isinstance(key, str) and key in DIAGNOSTIC_KEYS:
+                out[key] = _scrub_diagnostic_tree(value)
             elif key == "attempts" and isinstance(value, (list, tuple)):
                 out[key] = [_scrub_attempt(item) for item in value]
             else:

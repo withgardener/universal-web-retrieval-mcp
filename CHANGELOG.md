@@ -2,6 +2,67 @@
 
 All notable changes to this project. Format: Keep a Changelog; versioning: SemVer.
 
+## Unreleased
+
+Fixes from an independent review of 0.3.1. No new provider, no new dependency,
+no default behaviour change (private-network fetches stay allowed; block
+detection stays on).
+
+### Fixed
+
+- **The block-page heuristic no longer kills pages that talk about CAPTCHAs.**
+  `captcha` was both a title marker and a body marker, so a short help page
+  titled "CAPTCHA help" matched "title + marker" and any short glossary naming
+  reCAPTCHA/hCaptcha/Turnstile matched "three body markers" — both were reported
+  as interstitials and thrown away. The markers are now split into **technical
+  fingerprints** (strings a challenge implementation emits: `cf_chl_opt`,
+  "checking your browser", "enable javascript and cookies to continue",
+  `_incapsula_resource`, …) and **prose hints** (captcha, turnstile, "ray id",
+  "reference #"), and the rule is: two distinct technical fingerprints, or a
+  genuine **challenge title** ("Just a moment…", "Access Denied", "Attention
+  Required! | Cloudflare" — matched exactly or with a separator suffix, not by
+  substring) plus one marker. Real Cloudflare/Akamai/DDoS-Guard walls are still
+  downgraded to a fallback-eligible error; a single word, a code sample or an FAQ
+  quoting the wall text is content again. False negatives (a novel interstitial,
+  a JS-only shell) are preferred to hiding a real page.
+- **A `null` result container is malformed, not an empty answer.** JSON `null`
+  is what a broken envelope, an error page rendered as JSON or a truncated body
+  serialises to; `result_container()` returned `[]` for it, so the caller was
+  told "the web has nothing for this query" about a reply that said nothing.
+  It now raises `malformed response (… is null, not a list)` and the chain falls
+  over. Same rule for an explicit `"Pages": null` in the Yuanbao envelope and
+  for Tavily's extract container. A present, empty list is still an empty answer.
+- **Nested `error`/`errors` values are scrubbed recursively.** Only top-level
+  diagnostic *strings* were walked, so `{"error": {"url": "…?token=…"}}` and
+  `{"errors": ["…?api_key=…", {"message": …}]}` passed through with their
+  credentials intact. Every string inside an `error`/`errors`/`message`/… subtree
+  is now treated as diagnostic text at any depth (list or mapping), while codes,
+  counts and booleans keep their types; `attempts` entries get the same walk.
+  Successful rows are still untouched apart from exact configured-secret
+  removal, so signed URLs keep working.
+- **The opt-in private-network check handles special IP spellings and a stalled
+  resolver, and stops claiming absolutes.** Legacy numeric IPv4 forms
+  (`127.1`, `0177.0.0.1`, `0x7f.0.0.1`, `0x7f000001`, `2130706433`) and IPv6
+  zone ids (`[fe80::1%25eth0]`) are decoded and decided without DNS instead of
+  falling through to the resolver; a numeric-only host that cannot be decoded is
+  refused. The resolver call is bounded by the new
+  `WEB_RETRIEVAL_NETGUARD_DNS_TIMEOUT` (default 2 s) and a lookup that does not
+  answer in time is **refused** rather than allowed. Error text and README now
+  say plainly that this is a best-effort pre-flight heuristic, not SSRF
+  protection, and that the answer is only as good as the local resolver. The
+  default is unchanged: with `WEB_RETRIEVAL_BLOCK_PRIVATE` unset there is no
+  parsing, no DNS and no refusal.
+
+### Tests
+
+- The benign short-page case in `test_031_fetch_content.py` used a title that
+  could never match a marker ("Login help"), so it passed without touching the
+  false-positive path; it now covers the shapes that actually broke (a CAPTCHA
+  help page, a vendor glossary, an FAQ quoting "Just a moment…", a single
+  `cf_chl_opt` sample). The decimal-IP test in `test_031_netguard.py` no longer
+  proves anything by faking the resolver, and the README limits it asserts are
+  the ones the code now implements.
+
 ## 0.3.1 — 2026-11-14
 
 Hardening release: five correctness/security fixes, no new provider, no new
