@@ -42,6 +42,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from .. import __version__, config
+from ..budget import TimeBudget
 from ..errors import (AuthMode, Capability, FetchResult, Provider, ProviderError,
                       SearchResult, classify_http_error)
 
@@ -210,14 +211,23 @@ class YuanbaoProvider(Provider):
         return httpx.post(config.yuanbao_mcp_url(), json=body,
                           timeout=timeout, headers=self._headers(session))
 
+    def _request_timeout(self, budget: "TimeBudget"):
+        """Per-request timeout from the shared budget (never the full default).
+
+        The budget, not the configured read timeout, bounds the sequence: a
+        handshake cannot leave ``tools/call`` with a fresh 20 s to spend.
+        """
+        return budget.timeout(self._timeout(None))
+
     def _check_http(self, resp: httpx.Response) -> None:
         if resp.status_code >= 400 and resp.status_code != 404:
             # 404 is handled by the caller (session recovery); anything else here
             # is a transport-level failure.
             raise classify_http_error(resp.status_code, resp.text, authenticated=True)
 
-    def _initialize(self, timeout) -> Optional[str]:
+    def _initialize(self, budget: "TimeBudget") -> Optional[str]:
         """Run the HTTP handshake without holding the session-state lock."""
+        budget.require("yuanbao initialize")
         resp = self._post({
             "jsonrpc": "2.0", "id": self._next_id(), "method": "initialize",
             "params": {
@@ -225,7 +235,7 @@ class YuanbaoProvider(Provider):
                 "capabilities": {},
                 "clientInfo": {"name": "universal-web-retrieval", "version": __version__},
             },
-        }, timeout, session=None)
+        }, self._request_timeout(budget), session=None)
         self._check_http(resp)
         if resp.status_code == 404:
             # Endpoint answered but does not implement initialize — fall through to a
@@ -237,7 +247,9 @@ class YuanbaoProvider(Provider):
         session = resp.headers.get("mcp-session-id")
         # Best-effort "initialized" notification (no id, no response expected).
         try:
-            self._post({"jsonrpc": "2.0", "method": "notifications/initialized"}, timeout, session)
+            if not budget.expired():
+                self._post({"jsonrpc": "2.0", "method": "notifications/initialized"},
+                           self._request_timeout(budget), session)
         except Exception:  # noqa: BLE001 — a missing ack must not break the search
             log.debug("yuanbao: initialized notification failed (ignored)", exc_info=True)
         with self._session_lock:
@@ -245,29 +257,38 @@ class YuanbaoProvider(Provider):
             self._session_for = (config.yuanbao_mcp_url(), self.api_key())
         return session
 
-    def _session(self, timeout) -> Optional[str]:
+    def _session(self, budget: "TimeBudget") -> Optional[str]:
         key = (config.yuanbao_mcp_url(), self.api_key())
         with self._session_lock:
             if self._session_id and self._session_for == key:
                 return self._session_id
         # Initialization performs network I/O and intentionally runs without the
         # session lock. Concurrent initializations may race; either session works.
-        return self._initialize(timeout)
+        return self._initialize(budget)
 
     def _reset_session(self) -> None:
         with self._session_lock:
             self._session_id = None
             self._session_for = None
 
-    def _call_tool(self, arguments: Dict[str, Any], timeout) -> Dict[str, Any]:
+    def _call_tool(self, arguments: Dict[str, Any], budget: "TimeBudget") -> Dict[str, Any]:
+        """Call SearchPro, sharing ONE budget across handshake, call and retry.
+
+        A retry only happens when the budget can still afford a fresh
+        ``tools/call``; otherwise the link fails locally instead of blowing the
+        chain deadline with a request it cannot finish.
+        """
         for attempt in range(2):
-            session = self._session(timeout)
+            budget.require("yuanbao MCP session")
+            session = self._session(budget)
+            budget.require("yuanbao tools/call")
             resp = self._post({
                 "jsonrpc": "2.0", "id": self._next_id(), "method": "tools/call",
                 "params": {"name": TOOL_NAME, "arguments": arguments},
-            }, timeout, session)
+            }, self._request_timeout(budget), session)
             if resp.status_code == 404 and session and attempt == 0:
-                # Session expired/unknown server-side: re-handshake once.
+                # Session expired/unknown server-side: re-handshake once, if the
+                # budget still allows it.
                 self._reset_session()
                 continue
             self._check_http(resp)
@@ -312,8 +333,11 @@ class YuanbaoProvider(Provider):
         def _call() -> SearchResult:
             if not self.api_key():
                 raise ProviderError("yuanbao: no API key configured", fallback_eligible=True)
+            configured = self._timeout(timeout_override)
+            seconds = configured[1] if isinstance(configured, tuple) else configured
+            budget = TimeBudget(seconds)
             result = self._call_tool({"Query": clamp_query(query), "Cnt": cnt_for_limit(limit)},
-                                     self._timeout(timeout_override))
+                                     budget)
             payload = self._payload_from_result(result)
             if payload.get("Error"):
                 raise _classify_rpc_error(payload)
