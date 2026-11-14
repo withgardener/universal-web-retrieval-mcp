@@ -51,6 +51,7 @@ from typing import Dict
 import httpx
 
 from .. import config
+from ..content import enforce_not_blocked, truncate as truncate_page
 from ..errors import (AuthMode, Capability, FetchResult, Provider, ProviderError,
                       SearchResult, classify_http_error, result_container)
 
@@ -144,13 +145,16 @@ class DeepSeekProvider(Provider):
                     raise ProviderError(f"deepseek: request body too large (HTTP 413): {resp.text[:200]}")
                 raise classify_http_error(resp.status_code, resp.text, authenticated=True)
             data = resp.json()
-            content = str(data.get("content") or "")[:config.extract_char_limit()]
-            if not content.strip():
+            title = str(data.get("title") or "")
+            text = str(data.get("content") or "")
+            if not text.strip():
                 raise ProviderError("deepseek: empty content")
+            content, truncated, original = truncate_page(text)
+            enforce_not_blocked(title, content, provider=self.NAME, url=target)
             return FetchResult(url=str(data.get("url") or target), content=content,
                                provider=self.NAME, mode=AuthMode.KEYED,
-                               title=str(data.get("title") or ""),
-                               content_type="text_markdown")
+                               title=title, content_type="text_markdown",
+                               truncated=truncated, original_length=original)
         result, elapsed = self._timed(_call)
         result.latency_ms = elapsed
         return result

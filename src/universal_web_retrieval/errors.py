@@ -98,13 +98,19 @@ class FetchResult:
     title: str = ""
     latency_ms: int = 0
     content_type: str = "text_markdown"
+    # 0.3.1: was the content cut at the extract limit, and how long was it
+    # before the cut. ``original_length == len(content)`` when not truncated.
+    truncated: bool = False
+    original_length: int = 0
     # Per-provider outcome trail, e.g. [{"provider": "bocha", "outcome": "skipped:not_configured"}]
     attempts: List[Dict[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "url": self.url, "content": self.content, "title": self.title,
-            "content_type": self.content_type, "provider": self.provider,
+            "content_type": self.content_type,
+            "truncated": self.truncated, "original_length": self.original_length,
+            "provider": self.provider,
             "mode": self.mode.value, "latency_ms": self.latency_ms,
             "attempts": list(self.attempts),
         }

@@ -12,6 +12,7 @@ or CAPTCHA-protected pages are NOT guaranteed.
 from __future__ import annotations
 
 from .. import config
+from ..content import enforce_not_blocked, truncate as truncate_page
 from ..errors import AuthMode, FetchResult, Provider, ProviderError, SearchResult
 
 
@@ -66,8 +67,12 @@ class DDGSProvider(Provider):
     def _fetch_impl(self, url: str, timeout_override: float | None) -> FetchResult:
         with self._client(timeout_override) as client:
             resp = client.extract(url, fmt="text_markdown")
-        content = str(resp.get("content", ""))[:config.extract_char_limit()]
-        if not content:
+        text = str(resp.get("content", ""))
+        if not text:
             raise ProviderError("empty content")
+        content, truncated, original = truncate_page(text)
+        title = str(resp.get("title") or "")
+        enforce_not_blocked(title, content, provider=self.NAME, url=url)
         return FetchResult(url=url, content=content, provider=self.NAME, mode=self.mode(),
-                           content_type="text_markdown")
+                           title=title, content_type="text_markdown",
+                           truncated=truncated, original_length=original)

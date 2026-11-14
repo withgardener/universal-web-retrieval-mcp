@@ -13,6 +13,7 @@ import httpx
 from .. import config
 from ..errors import (AuthMode, FetchResult, Provider, ProviderError, SearchResult,
                       classify_http_error, result_container)
+from ..content import enforce_not_blocked, truncate as truncate_page
 
 
 class AnySearchProvider(Provider):
@@ -58,11 +59,15 @@ class AnySearchProvider(Provider):
             if data.get("code") != 0:
                 raise ProviderError(f"API code {data.get('code')}: {data.get('message','')}")
             d = data.get("data", {})
-            content = str(d.get("content", ""))[:config.extract_char_limit()]
-            if not content:
+            title = str(d.get("title", ""))
+            text = str(d.get("content", ""))
+            if not text:
                 raise ProviderError("empty content")
+            content, truncated, original = truncate_page(text)
+            enforce_not_blocked(title, content, provider=self.NAME, url=url)
             return FetchResult(url=url, content=content, provider=self.NAME, mode=self.mode(),
-                               title=str(d.get("title", "")), content_type="text_markdown")
+                               title=title, content_type="text_markdown",
+                               truncated=truncated, original_length=original)
         result, elapsed = self._timed(_call)
         result.latency_ms = elapsed
         return result

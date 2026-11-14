@@ -14,6 +14,7 @@ import httpx
 from .. import config
 from ..errors import (AuthMode, FetchResult, Provider, ProviderError, SearchResult,
                       classify_http_error, result_container)
+from ..content import enforce_not_blocked, truncate as truncate_page
 
 
 class TavilyProvider(Provider):
@@ -63,11 +64,15 @@ class TavilyProvider(Provider):
                 msg = str(failed[0].get("error", "extraction failed")) if failed else "no results"
                 raise ProviderError(msg)
             x = results[0]
-            content = str(x.get("raw_content") or x.get("content") or "")[:config.extract_char_limit()]
-            if not content:
+            title = str(x.get("title", ""))
+            text = str(x.get("raw_content") or x.get("content") or "")
+            if not text:
                 raise ProviderError("empty content")
+            content, truncated, original = truncate_page(text)
+            enforce_not_blocked(title, content, provider=self.NAME, url=url)
             return FetchResult(url=url, content=content, provider=self.NAME, mode=self.mode(),
-                               title=str(x.get("title", "")), content_type="text_markdown")
+                               title=title, content_type="text_markdown",
+                               truncated=truncated, original_length=original)
         result, elapsed = self._timed(_call)
         result.latency_ms = elapsed
         return result

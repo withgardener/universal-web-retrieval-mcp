@@ -52,6 +52,7 @@ from typing import Any, Dict
 import httpx
 
 from .. import config
+from ..content import enforce_not_blocked, truncate as truncate_page
 from ..errors import (AuthMode, Capability, FetchResult, Provider, ProviderError,
                       SearchResult, result_container)
 
@@ -197,13 +198,16 @@ class KimiProvider(Provider):
                 self._raise_http(resp.status_code, payload, resp.text, is_fetch=True)
 
             data = resp.json()
-            content = str(data.get("markdown") or "")[:config.extract_char_limit()]
-            if not content.strip():
+            title = str(data.get("title") or "")
+            text = str(data.get("markdown") or "")
+            if not text.strip():
                 raise ProviderError("kimi: empty markdown")
+            content, truncated, original = truncate_page(text)
+            enforce_not_blocked(title, content, provider=self.NAME, url=target)
             return FetchResult(url=str(data.get("url") or target), content=content,
                                provider=self.NAME, mode=AuthMode.KEYED,
-                               title=str(data.get("title") or ""),
-                               content_type="text_markdown")
+                               title=title, content_type="text_markdown",
+                               truncated=truncated, original_length=original)
         result, elapsed = self._timed(_call)
         result.latency_ms = elapsed
         return result

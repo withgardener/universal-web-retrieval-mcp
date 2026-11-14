@@ -208,6 +208,26 @@ def max_results_cap() -> int:
 def extract_char_limit() -> int:
     return _int_env("WEB_RETRIEVAL_EXTRACT_CHAR_LIMIT", 15_000)
 
+
+def block_detection_enabled() -> bool:
+    """``UWR_BLOCK_DETECTION``: detect CDN/captcha interstitials (default on).
+
+    ``off``/``0``/``false``/``no`` disables the check. It only affects fetch
+    block detection; truncation is always reported.
+    """
+    value = (os.environ.get("UWR_BLOCK_DETECTION") or "").strip().lower()
+    return value not in ("off", "0", "false", "no", "disabled")
+
+
+def block_detection_max_chars() -> int:
+    """``UWR_BLOCK_DETECTION_MAX_CHARS``: bodies at/above this are never "blocked".
+
+    A challenge page is a wall, not an article; anything this long is treated as
+    real content regardless of which words it happens to contain.
+    """
+    return _int_env("UWR_BLOCK_DETECTION_MAX_CHARS", 4000)
+
+
 def log_level() -> str:
     return os.environ.get("WEB_RETRIEVAL_LOG_LEVEL", "WARNING").upper()
 
