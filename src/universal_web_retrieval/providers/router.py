@@ -245,8 +245,8 @@ class ProviderRouter:
             raise InvalidInputError("url must be a non-empty string")
         if not url.lower().startswith(("http://", "https://")):
             raise InvalidInputError(f"unsupported URL scheme: {url[:50]}")
-        # Refuse private/loopback/link-local targets before any provider sees
-        # them (0.3.1). See netguard for exactly what this can and cannot prove.
+        # Optional opt-in check (WEB_RETRIEVAL_BLOCK_PRIVATE); a no-op by
+        # default, so 0.3.0's intranet/localhost fetches keep working.
         netguard.check_url(url)
         result = self._walk(Capability.FETCH, url=url, deadline=deadline,
                             providers=providers)
@@ -257,9 +257,10 @@ class ProviderRouter:
     def _check_reported_url(result: FetchResult, *, requested: str) -> None:
         """Re-validate a final URL a provider reports after following redirects.
 
-        The hop already happened on the provider's network, so this can only
-        fail closed for the caller — but silently returning intranet content as
-        if it were the requested page is worse than an error.
+        Only active under ``WEB_RETRIEVAL_BLOCK_PRIVATE`` (``check_url`` is a
+        no-op otherwise), so the default keeps 0.3.0 behaviour. Even when
+        active, the hop already happened on the provider's network: this can
+        only fail closed for the caller. It is not SSRF protection.
         """
         final = (getattr(result, "url", "") or "").strip()
         if not final or final == requested:

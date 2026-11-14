@@ -53,41 +53,47 @@ dependency, default chains unchanged.
 
 ### Security
 
-- **`web_fetch` refuses private-network targets by default.** Loopback, RFC1918,
-  link-local, CGNAT and other non-public addresses are rejected before any
-  provider is called (per-URL `invalid input:` error, so a batch keeps working).
-  `UWR_ALLOW_PRIVATE_NETWORK=1` is the explicit opt-in and restores the pre-0.3.1
-  behaviour. New `netguard` module: IP literals (incl. bracketed and
-  IPv4-mapped IPv6, and the decimal `2130706433` form) are decided exactly;
-  hostnames use the platform `socket.getaddrinfo` (so `/etc/hosts`,
-  systemd-resolved and host-level controls still apply — no private DNS client is
-  added and the dependent host's constraints are not bypassed); every returned
-  address must be globally routable, so a public+private answer is rejected. A
-  provider-reported final URL is re-checked and fails the call closed when it is
-  non-public.
-- **Honest limits of that check** (documented in `netguard` and README): the fetch
-  happens on the provider's network, so there is no connection binding — a
-  redirect hop is only caught after it happened, and DNS rebinding between our
-  check and the provider's connect cannot be excluded. A hostname that does not
-  resolve locally is allowed (logged at DEBUG), so an internal-only name is not
-  blocked. Only a design that resolves, connects and verifies the peer address
-  can claim full protection; this is defence in depth, not a sandbox.
+- **Optional private-target block for `web_fetch`: `WEB_RETRIEVAL_BLOCK_PRIVATE`.**
+  **Off by default**, so 0.3.0 behaviour is unchanged: `web_fetch` still fetches
+  intranet, `localhost` and metadata URLs, which is a deliberate capability for a
+  local agent tool. Set `WEB_RETRIEVAL_BLOCK_PRIVATE=1` (the name this README has
+  reserved since 0.1.0) to refuse loopback, RFC1918, link-local, CGNAT and other
+  non-public targets before any provider is called; the refusal is per URL
+  (`invalid input:` error), so a batch keeps working. New `netguard` module: IP
+  literals (incl. bracketed and IPv4-mapped IPv6, and the decimal `2130706433`
+  form) are decided exactly; hostnames use the platform `socket.getaddrinfo` (so
+  `/etc/hosts`, systemd-resolved and host-level controls still apply — no private
+  DNS client is added and the dependent host's constraints are not bypassed);
+  every returned address must be globally routable, so a public+private answer is
+  rejected. A provider-reported final URL is re-checked and fails the call closed
+  when it is non-public.
+- **This is not SSRF protection** (stated in `netguard`, the README, the tool
+  description and the error text). The fetch happens on the provider's network,
+  so there is no connection binding: a redirect hop is only re-checked after it
+  happened, and DNS rebinding between our check and the provider's connect cannot
+  be excluded. A hostname that does not resolve locally is allowed (logged at
+  DEBUG), so an internal-only name is not blocked. Only a design that resolves,
+  connects and verifies the peer address can claim that; network isolation
+  (container, netns, egress firewall, provider deny-list) remains the outer
+  boundary for untrusted input.
 
 ### Changed
 
 - `FetchResult.to_dict()` gains `truncated` and `original_length` (additive).
 - `web_search` attempts gain `empty` (failover) and `mode` on fan-out `ok` entries
   (which auth mode answered); `list_providers` gains `fetch_policy`
-  (`allow_private_network`, `block_detection`, `extract_char_limit`).
-- Behaviour change: fetching a private/loopback/link-local URL now fails unless
-  `UWR_ALLOW_PRIVATE_NETWORK=1`. Default chains, provider order, timeouts and the
-  failover payload shape are otherwise unchanged (the 0.3.0 golden test still
-  passes as-is).
-- Tests: 383 collected, 382 pass, 1 skipped (the opt-in live-provider file).
+  (`block_private_network`, `block_detection`, `extract_char_limit`).
+- No behaviour change by default: private/loopback/link-local fetches work
+  exactly as in 0.3.0 unless `WEB_RETRIEVAL_BLOCK_PRIVATE` is set. Default
+  chains, provider order, timeouts and the failover payload shape are unchanged
+  (the 0.3.0 golden test still passes as-is).
+- Tests: 415 collected, 414 pass, 1 skipped (the opt-in live-provider file).
   New offline suites: `test_031_empty_answers.py`, `test_031_fetch_content.py`,
   `test_031_redaction.py`, `test_031_budget.py`, `test_031_netguard.py`; existing
-  tests that pinned "empty means error" were updated with a comment, and
-  `tests/conftest.py` stubs `netguard._resolve` so the suite never touches DNS.
+  tests that pinned "empty means error" were updated with a comment,
+  `test_031_netguard.py` pins both the default and the opt-in path (including a
+  docs test that rejects SSRF overclaiming), and `tests/conftest.py` clears
+  `WEB_RETRIEVAL_*` and stubs `netguard._resolve` so the suite never touches DNS.
 
 ## 0.3.0 — 2026-10-23
 

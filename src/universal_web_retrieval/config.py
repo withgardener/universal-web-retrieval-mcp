@@ -228,15 +228,20 @@ def block_detection_max_chars() -> int:
     return _int_env("UWR_BLOCK_DETECTION_MAX_CHARS", 4000)
 
 
-def allow_private_network() -> bool:
-    """``UWR_ALLOW_PRIVATE_NETWORK``: allow web_fetch to target private space.
+def block_private_network() -> bool:
+    """``WEB_RETRIEVAL_BLOCK_PRIVATE``: refuse non-public ``web_fetch`` targets.
 
-    Default is OFF: loopback, link-local, CGNAT and RFC1918 targets are rejected
-    before any provider is called. Setting it to ``1``/``true``/``yes``/``on``
-    restores the pre-0.3.1 behaviour for operators who fetch intranet pages.
+    **Off by default**, matching 0.3.0: ``web_fetch`` fetches whatever the host
+    can reach, including intranet and ``localhost`` pages — a deliberate
+    capability for a local agent tool. Setting it to ``1``/``true``/``yes``/
+    ``on``/``block``/``enabled`` turns on the pre-flight check in ``netguard``.
+
+    That check is a target heuristic, not an SSRF boundary: the fetch happens on
+    the provider's network, so DNS rebinding and redirect hops cannot be bound
+    to it. See the README's network-scope section for the exact limits.
     """
-    value = (os.environ.get("UWR_ALLOW_PRIVATE_NETWORK") or "").strip().lower()
-    return value in ("1", "true", "yes", "on", "allow")
+    value = (os.environ.get("WEB_RETRIEVAL_BLOCK_PRIVATE") or "").strip().lower()
+    return value in ("1", "true", "yes", "on", "block", "enabled")
 
 
 def log_level() -> str:

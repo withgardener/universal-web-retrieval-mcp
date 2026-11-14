@@ -1,8 +1,10 @@
 """Hermetic test environment.
 
-Provider keys and ``UWR_*`` knobs are cleared for every test so results never
-depend on whatever the host shell happens to export (the production Hermes env
-does export ``ANYSEARCH_API_KEY``, which used to flip keyed/keyless asserts).
+Provider keys and ``UWR_*``/``WEB_RETRIEVAL_*`` knobs are cleared for every test
+so results never depend on whatever the host shell happens to export (the
+production Hermes env does export ``ANYSEARCH_API_KEY``, which used to flip
+keyed/keyless asserts, and ``WEB_RETRIEVAL_BLOCK_PRIVATE`` would otherwise turn
+the opt-in private-target check on for the whole suite).
 """
 import os
 import sys
@@ -30,7 +32,7 @@ _CLEARED_KEYS = (
 @pytest.fixture(autouse=True)
 def _hermetic_env(monkeypatch):
     for name in list(os.environ):
-        if name.startswith("UWR_") or name in _CLEARED_KEYS:
+        if name.startswith(("UWR_", "WEB_RETRIEVAL_")) or name in _CLEARED_KEYS:
             monkeypatch.delenv(name, raising=False)
     yield
 
@@ -39,12 +41,13 @@ def _hermetic_env(monkeypatch):
 def _hermetic_dns(monkeypatch):
     """No test may depend on the host resolver.
 
-    ``web_fetch`` resolves the target host to decide whether it is public
-    (0.3.1), so an unpatched resolver would make the suite depend on the CI
-    host's DNS. Only ``netguard._resolve`` is stubbed — patching
-    ``socket.getaddrinfo`` itself would also redirect httpx and turn a stubbed
-    test into a real connection attempt. Tests that need a specific answer
-    patch ``netguard._resolve`` themselves, which overrides this default.
+    The opt-in private-target check (0.3.1, ``WEB_RETRIEVAL_BLOCK_PRIVATE``)
+    resolves the target host to decide whether it is public, so an unpatched
+    resolver would make those tests depend on the host's DNS. Only
+    ``netguard._resolve`` is stubbed — patching ``socket.getaddrinfo`` itself
+    would also redirect httpx and turn a stubbed test into a real connection
+    attempt. Tests that need a specific answer patch ``netguard._resolve``
+    themselves, which overrides this default.
     """
     from universal_web_retrieval import netguard
 

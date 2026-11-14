@@ -148,7 +148,7 @@ Unknown names, providers lacking the capability, and disabled providers are drop
 | `WEB_RETRIEVAL_LOG_LEVEL` | no | `WARNING` default; logs go to **stderr** (stdout is MCP JSON-RPC) |
 | `WEB_RETRIEVAL_MAX_RESULTS` | no | Cap for `web_search.limit` (default 20) |
 | `WEB_RETRIEVAL_EXTRACT_CHAR_LIMIT` | no | Max fetched-content chars (default 15000). Results report `truncated`/`original_length` |
-| `UWR_ALLOW_PRIVATE_NETWORK` | no | `1` allows `web_fetch` to target private/loopback/link-local hosts (default: refused) |
+| `WEB_RETRIEVAL_BLOCK_PRIVATE` | no | `1` makes `web_fetch` refuse private/loopback/link-local hosts (default: off — they are fetched) |
 | `UWR_BLOCK_DETECTION` | no | `off` disables CDN/CAPTCHA interstitial detection in `web_fetch` (default: on) |
 | `UWR_BLOCK_DETECTION_MAX_CHARS` | no | Bodies at/above this many chars are never judged "blocked" (default 4000) |
 | `WEB_RETRIEVAL_ANYSEARCH_CONNECT_TIMEOUT` / `_TIMEOUT` | no | AnySearch connect/read timeouts (5s / 20s) |
@@ -268,7 +268,7 @@ Failed URLs carry an `error` field instead of `content`. Content is Markdown/cle
 
 ### `list_providers()`
 
-Returns every provider this build knows, with capability, configuration status, enabled flag and its 1-based position in each active chain, plus the active `search_mode`, the fan-out settings (`fanout.n`, `fanout.grace_s`) and the fetch policy (`fetch_policy.allow_private_network`, `.block_detection`, `.extract_char_limit`). Key values are never returned.
+Returns every provider this build knows, with capability, configuration status, enabled flag and its 1-based position in each active chain, plus the active `search_mode`, the fan-out settings (`fanout.n`, `fanout.grace_s`) and the fetch policy (`fetch_policy.block_private_network`, `.block_detection`, `.extract_char_limit`). Key values are never returned.
 
 ```json
 {
@@ -287,11 +287,11 @@ Returns every provider this build knows, with capability, configuration status, 
 }
 ```
 
-### Network scope & SSRF note
+### Network scope & private targets
 
-**Private-network access is opt-in (0.3.1).** `web_fetch` refuses private, loopback, link-local, CGNAT and otherwise non-public targets before any provider is called, and the refusal is per URL (`error: invalid input: refusing to fetch …`), so a batch keeps working. Set `UWR_ALLOW_PRIVATE_NETWORK=1` to restore the pre-0.3.1 behaviour (fetching intranet pages, `localhost` dev servers, …).
+**Private-network fetches are allowed, as in 0.3.0. The block is opt-in.** `web_fetch` retrieves any URL the host can reach, including intranet pages, `localhost` dev servers and cloud metadata endpoints — a deliberate capability for a local agent tool. Set `WEB_RETRIEVAL_BLOCK_PRIVATE=1` (the name reserved here since 0.1.0) to refuse private, loopback, link-local, CGNAT and otherwise non-public targets before any provider is called; the refusal is per URL (`error: invalid input: refusing to fetch …`), so a batch keeps working. **Off by default** — the check is off unless that variable is set, so upgrading changes nothing.
 
-How far the check reaches, and where it stops:
+How far the check reaches when it is on, and where it stops:
 
 - **IP literals** (including bracketed IPv6, IPv4-mapped IPv6 and the decimal `2130706433` form) are decided exactly, with no DNS.
 - **Hostnames** are resolved with `socket.getaddrinfo` — the platform resolver — so `/etc/hosts`, systemd-resolved and host-level controls still apply. No private DNS client is added: bypassing the dependent host's resolution policy would defeat its existing security constraints. **Every** returned address must be globally routable, so a public+private answer (what a rebinding attempt looks like from here) is rejected.
@@ -299,7 +299,7 @@ How far the check reaches, and where it stops:
 - **DNS rebinding** between our check and the provider's connect cannot be excluded for the same reason. Only a design that resolves, connects and then verifies the peer address can claim that; a third-party extraction API does not expose it.
 - **A hostname that does not resolve here is allowed** (logged at DEBUG). The provider resolves it on its own network, so our resolver's failure proves nothing — residual gap: an internal-only name that only resolves inside your network is not detectable from this host.
 
-For untrusted agent input in a hardened deployment, keep network-level isolation (container/netns/firewall) as the outer boundary; this check is defence in depth, not a sandbox.
+**This is not SSRF protection.** It is a cheap pre-flight deny of obvious targets that only runs when you ask for it; it cannot stop DNS rebinding or a provider-side redirect hop, and it does not sandbox the extraction service. For untrusted agent input in a hardened deployment, keep **network isolation** (container or netns without a route to the intranet, egress firewall rules, and a deny-list at the provider) as the outer boundary. Treat the check as extra friction on top of that, never as a replacement for it.
 
 Batch behavior: `urls` is capped at **5 per call** (larger batches are rejected with an explicit error, not silently truncated), duplicates are de-duplicated preserving first-seen order, and the **whole batch shares one deadline** — URLs whose turn arrives after the deadline return a timeout error without any network attempt.
 

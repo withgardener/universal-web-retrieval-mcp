@@ -104,9 +104,11 @@ def web_search_tool(query: str, limit: int = 5, providers: list[str] | None = No
     "count; failed URLs carry an `error` field instead. A CDN/CAPTCHA interstitial "
     "(Cloudflare \"Just a moment…\", Akamai \"Access Denied\") is not returned as "
     "content: it is a fallback-eligible error, so the chain tries the next provider. "
-    "Private, loopback and link-local targets are refused unless the operator set "
-    "UWR_ALLOW_PRIVATE_NETWORK=1. Note: JS-rendered, login-walled or "
-    "CAPTCHA-protected pages are not guaranteed."))
+    "Private, loopback and link-local targets are fetched like any other URL by "
+    "default; with WEB_RETRIEVAL_BLOCK_PRIVATE=1 they are refused instead. That "
+    "opt-in check is a target heuristic, not SSRF protection (no protection "
+    "against DNS rebinding or a redirect hop at the provider). Note: JS-rendered, "
+    "login-walled or CAPTCHA-protected pages are not guaranteed."))
 def web_fetch_tool(url: str = "", urls: list[str] | None = None,
                    providers: list[str] | None = None) -> str:
     raw = [u for u in ([url] if url else []) + list(urls or []) if u]
@@ -182,7 +184,7 @@ def list_providers_tool() -> str:
         "search_mode": config.search_mode(),
         "fanout": {"n": config.fanout_providers(), "grace_s": config.fanout_grace()},
         "fetch_policy": {
-            "allow_private_network": config.allow_private_network(),
+            "block_private_network": config.block_private_network(),
             "block_detection": config.block_detection_enabled(),
             "extract_char_limit": config.extract_char_limit(),
         },
