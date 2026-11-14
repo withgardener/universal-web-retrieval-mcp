@@ -74,6 +74,16 @@ FAQ_QUOTING_WALL = {
              "seconds; if it does not, allow JavaScript and cookies."),
 }
 
+# A help page whose title opens with a denial phrase but whose suffix is a
+# subtitle, not the site's own label. The separator rule used to accept any
+# suffix, so this page matched title + the word "captcha" and was thrown away.
+ACCESS_DENIED_GUIDE = {
+    "title": "Access Denied: a practical guide to 403 responses",
+    "body": ("A 403 response means the server understood the request and refused "
+             "it. Some sites put a captcha in front of a page; others simply do "
+             "not let the file be read. Check the URL and your credentials."),
+}
+
 LONG_ARTICLE = {
     "title": "Why captchas annoy everyone",
     "body": ("Cloudflare and other CDNs serve captcha challenges. " * 120),
@@ -139,6 +149,18 @@ def test_docs_listing_several_captcha_vendors_is_not_a_block():
 def test_short_faq_quoting_an_interstitial_is_not_a_block():
     """Quoted wall text without the title fingerprint of a wall is content."""
     assert challenge_reason(FAQ_QUOTING_WALL["title"], FAQ_QUOTING_WALL["body"]) == ""
+
+
+def test_help_page_with_a_subtitle_is_not_a_block():
+    """``Access Denied: a practical guide to 403 responses`` is a guide, not a wall.
+
+    A real interstitial appends the site's own label ("Access Denied -
+    example.com"); a subtitle is a phrase. The separator match used to accept
+    any suffix, so a doc about 403s that mentions a captcha was reported as a
+    challenge page and never returned.
+    """
+    assert challenge_reason(ACCESS_DENIED_GUIDE["title"],
+                            ACCESS_DENIED_GUIDE["body"]) == ""
 
 
 def test_challenge_title_alone_is_not_enough():

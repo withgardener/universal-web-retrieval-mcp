@@ -2,71 +2,11 @@
 
 All notable changes to this project. Format: Keep a Changelog; versioning: SemVer.
 
-## Unreleased
-
-Fixes from an independent review of 0.3.1. No new provider, no new dependency,
-no default behaviour change (private-network fetches stay allowed; block
-detection stays on).
-
-### Fixed
-
-- **The block-page heuristic no longer kills pages that talk about CAPTCHAs.**
-  `captcha` was both a title marker and a body marker, so a short help page
-  titled "CAPTCHA help" matched "title + marker" and any short glossary naming
-  reCAPTCHA/hCaptcha/Turnstile matched "three body markers" — both were reported
-  as interstitials and thrown away. The markers are now split into **technical
-  fingerprints** (strings a challenge implementation emits: `cf_chl_opt`,
-  "checking your browser", "enable javascript and cookies to continue",
-  `_incapsula_resource`, …) and **prose hints** (captcha, turnstile, "ray id",
-  "reference #"), and the rule is: two distinct technical fingerprints, or a
-  genuine **challenge title** ("Just a moment…", "Access Denied", "Attention
-  Required! | Cloudflare" — matched exactly or with a separator suffix, not by
-  substring) plus one marker. Real Cloudflare/Akamai/DDoS-Guard walls are still
-  downgraded to a fallback-eligible error; a single word, a code sample or an FAQ
-  quoting the wall text is content again. False negatives (a novel interstitial,
-  a JS-only shell) are preferred to hiding a real page.
-- **A `null` result container is malformed, not an empty answer.** JSON `null`
-  is what a broken envelope, an error page rendered as JSON or a truncated body
-  serialises to; `result_container()` returned `[]` for it, so the caller was
-  told "the web has nothing for this query" about a reply that said nothing.
-  It now raises `malformed response (… is null, not a list)` and the chain falls
-  over. Same rule for an explicit `"Pages": null` in the Yuanbao envelope and
-  for Tavily's extract container. A present, empty list is still an empty answer.
-- **Nested `error`/`errors` values are scrubbed recursively.** Only top-level
-  diagnostic *strings* were walked, so `{"error": {"url": "…?token=…"}}` and
-  `{"errors": ["…?api_key=…", {"message": …}]}` passed through with their
-  credentials intact. Every string inside an `error`/`errors`/`message`/… subtree
-  is now treated as diagnostic text at any depth (list or mapping), while codes,
-  counts and booleans keep their types; `attempts` entries get the same walk.
-  Successful rows are still untouched apart from exact configured-secret
-  removal, so signed URLs keep working.
-- **The opt-in private-network check handles special IP spellings and a stalled
-  resolver, and stops claiming absolutes.** Legacy numeric IPv4 forms
-  (`127.1`, `0177.0.0.1`, `0x7f.0.0.1`, `0x7f000001`, `2130706433`) and IPv6
-  zone ids (`[fe80::1%25eth0]`) are decoded and decided without DNS instead of
-  falling through to the resolver; a numeric-only host that cannot be decoded is
-  refused. The resolver call is bounded by the new
-  `WEB_RETRIEVAL_NETGUARD_DNS_TIMEOUT` (default 2 s) and a lookup that does not
-  answer in time is **refused** rather than allowed. Error text and README now
-  say plainly that this is a best-effort pre-flight heuristic, not SSRF
-  protection, and that the answer is only as good as the local resolver. The
-  default is unchanged: with `WEB_RETRIEVAL_BLOCK_PRIVATE` unset there is no
-  parsing, no DNS and no refusal.
-
-### Tests
-
-- The benign short-page case in `test_031_fetch_content.py` used a title that
-  could never match a marker ("Login help"), so it passed without touching the
-  false-positive path; it now covers the shapes that actually broke (a CAPTCHA
-  help page, a vendor glossary, an FAQ quoting "Just a moment…", a single
-  `cf_chl_opt` sample). The decimal-IP test in `test_031_netguard.py` no longer
-  proves anything by faking the resolver, and the README limits it asserts are
-  the ones the code now implements.
-
 ## 0.3.1 — 2026-11-14
 
-Hardening release: five correctness/security fixes, no new provider, no new
-dependency, default chains unchanged.
+Hardening release: correctness and security fixes from an independent review. No
+new provider, no new dependency, no default behaviour change — private-network
+fetches stay allowed, the block stays opt-in, and interstitial detection stays on.
 
 ### Fixed
 
@@ -78,26 +18,43 @@ dependency, default chains unchanged.
   `errors.result_container()`: a **missing** results container (schema change,
   gateway error page, truncated JSON) is still a malformed reply and a
   `ProviderError`; a **present-but-empty** container is an empty answer and
-  returns `SearchResult(results=[])`. Failover records `{"outcome": "empty"}`,
-  keeps walking (a later link may have hits) and returns the first empty answer
-  as a success when nothing produced hits. Fan-out already counted empty OK
-  answers as OK; it now also starts the grace clock on one, so "no matches" is
-  not the slowest possible query. API-level error envelopes (e.g. Zhipu 1703)
-  remain errors: the provider said it failed, we did not merely get nothing.
+  returns `SearchResult(results=[])`. JSON `null` is malformed too: it is what a
+  broken envelope or an error page rendered as JSON serialises to, and it used to
+  be returned as `[]`, telling the caller "the web has nothing for this query"
+  about a reply that said nothing. Same rule for an explicit `"Pages": null` in
+  the Yuanbao envelope and for Tavily's extract container. Failover records
+  `{"outcome": "empty"}`, keeps walking (a later link may have hits) and returns
+  the first empty answer as a success when nothing produced hits. Fan-out already
+  counted empty OK answers as OK; it now also starts the grace clock on one, so
+  "no matches" is not the slowest possible query. API-level error envelopes
+  (e.g. Zhipu 1703) remain errors: the provider said it failed, we did not merely
+  get nothing.
 - **Fetch truncation is explicit.** Content was cut at
   `WEB_RETRIEVAL_EXTRACT_CHAR_LIMIT` with nothing in the payload saying so.
   `FetchResult` now reports `truncated` (bool) and `original_length` (pre-cut
   character count) and all six fetch providers go through `content.truncate()`.
   Additive: `content` is still a clean prefix at the limit with no marker text.
-- **CDN/CAPTCHA interstitials are no longer returned as page content.**
-  `content.enforce_not_blocked()` classifies a short body with a challenge title
-  plus a body marker, or three distinct body markers, and raises a
-  fallback-eligible error so the chain tries the next provider. Length alone is
-  never a signal, so short pages and long articles mentioning captchas pass
-  through. `UWR_BLOCK_DETECTION=off` disables it,
-  `UWR_BLOCK_DETECTION_MAX_CHARS` (default 4000) sets the length ceiling.
+- **CDN/CAPTCHA interstitials are no longer returned as page content, and pages
+  that discuss them are no longer mistaken for one.**
+  `content.enforce_not_blocked()` weighs two kinds of evidence in a short body
+  (`UWR_BLOCK_DETECTION_MAX_CHARS`, default 4000): **technical fingerprints** that
+  only a challenge implementation emits (`cf_chl_opt`, "checking your browser",
+  "enable javascript and cookies to continue", `_incapsula_resource`, …) and
+  **prose hints** that walls and documentation share (captcha, turnstile,
+  "ray id", "reference #"). A page is blocked only on **two distinct technical
+  fingerprints**, or on a genuine **challenge title plus one marker**. A title
+  counts only as the whole title or the challenge phrase followed by the site's
+  own short label ("Access Denied - example.com", "Attention Required! |
+  Cloudflare"); a subtitle after a colon — "Access Denied: a practical guide to
+  403 responses" — is prose and no longer matches, and a bare word such as
+  "captcha" is never a title marker. Length alone is never a signal. Real
+  Cloudflare/Akamai/Sucuri/DDoS-Guard walls still raise a fallback-eligible error
+  so the chain tries the next provider; a single marker, a code sample or an FAQ
+  quoting the wall text stays content. False negatives (a novel interstitial, a
+  JS-only shell) are preferred to hiding a real page.
+  `UWR_BLOCK_DETECTION=off` disables the check.
 - **Successful URLs are no longer rewritten by the redaction regex.** `_json()`
-  applied one global `[?&](token|key|sig|…)="` regex to the whole serialised
+  applied one global `[?&](token|key|sig|…)=` regex to the whole serialised
   payload, so every signed URL inside fetched Markdown or a search row came back
   as `<redacted>` — a broken link. Scrubbing is now structural and split by
   trust: diagnostic text (`error`, `attempts`, `AUTH FAILURE` log lines) gets the
@@ -105,6 +62,14 @@ dependency, default chains unchanged.
   credential query parameters), while successful payloads only lose exact
   configured-secret values. New `redact` module;
   `server._redact_secrets` remains as an alias for the diagnostic scrubber.
+- **Nested `error`/`errors` values are scrubbed recursively.** Only top-level
+  diagnostic *strings* were walked, so `{"error": {"url": "…?token=…"}}` and
+  `{"errors": ["…?api_key=…", {"message": …}]}` passed through with their
+  credentials intact. Every string inside an `error`/`errors`/`message`/… subtree
+  is now treated as diagnostic text at any depth (list or mapping), while codes,
+  counts and booleans keep their types; `attempts` entries get the same walk.
+  Successful rows are still untouched apart from exact configured-secret removal,
+  so signed URLs keep working.
 - **A multi-request provider now honours one budget.** Yuanbao made up to five
   HTTP requests per search (initialize, initialized notification, tools/call,
   re-handshake + retry), each with the full configured read timeout, so a 20 s
@@ -120,14 +85,20 @@ dependency, default chains unchanged.
   local agent tool. Set `WEB_RETRIEVAL_BLOCK_PRIVATE=1` (the name this README has
   reserved since 0.1.0) to refuse loopback, RFC1918, link-local, CGNAT and other
   non-public targets before any provider is called; the refusal is per URL
-  (`invalid input:` error), so a batch keeps working. New `netguard` module: IP
-  literals (incl. bracketed and IPv4-mapped IPv6, and the decimal `2130706433`
-  form) are decided exactly; hostnames use the platform `socket.getaddrinfo` (so
-  `/etc/hosts`, systemd-resolved and host-level controls still apply — no private
-  DNS client is added and the dependent host's constraints are not bypassed);
-  every returned address must be globally routable, so a public+private answer is
-  rejected. A provider-reported final URL is re-checked and fails the call closed
-  when it is non-public.
+  (`invalid input:` error), so a batch keeps working. New `netguard` module:
+  IP literals are decided exactly and without DNS, including bracketed and
+  IPv4-mapped IPv6, IPv6 zone ids (`[fe80::1%25eth0]`) and every legacy numeric
+  IPv4 spelling the C library accepts (`127.1`, `0177.0.0.1`, `0x7f.0.0.1`,
+  `0x7f000001`, `2130706433`); a numeric-only host that cannot be decoded is
+  refused. `localhost`, `localhost.` and `*.localhost` are refused without DNS
+  (RFC 6761), so a lookup that fails cannot turn one into an allow. Hostnames use
+  the platform `socket.getaddrinfo` (so `/etc/hosts`, systemd-resolved and
+  host-level controls still apply — no private DNS client is added and the
+  dependent host's constraints are not bypassed); the lookup is bounded by
+  `WEB_RETRIEVAL_NETGUARD_DNS_TIMEOUT` (default 2 s) and a lookup that does not
+  answer is **refused**, not allowed. Every returned address must be globally
+  routable, so a public+private answer is rejected. A provider-reported final URL
+  is re-checked and fails the call closed when it is non-public.
 - **This is not SSRF protection** (stated in `netguard`, the README, the tool
   description and the error text). The fetch happens on the provider's network,
   so there is no connection binding: a redirect hop is only re-checked after it
@@ -148,13 +119,18 @@ dependency, default chains unchanged.
   exactly as in 0.3.0 unless `WEB_RETRIEVAL_BLOCK_PRIVATE` is set. Default
   chains, provider order, timeouts and the failover payload shape are unchanged
   (the 0.3.0 golden test still passes as-is).
-- Tests: 415 collected, 414 pass, 1 skipped (the opt-in live-provider file).
-  New offline suites: `test_031_empty_answers.py`, `test_031_fetch_content.py`,
-  `test_031_redaction.py`, `test_031_budget.py`, `test_031_netguard.py`; existing
-  tests that pinned "empty means error" were updated with a comment,
-  `test_031_netguard.py` pins both the default and the opt-in path (including a
-  docs test that rejects SSRF overclaiming), and `tests/conftest.py` clears
-  `WEB_RETRIEVAL_*` and stubs `netguard._resolve` so the suite never touches DNS.
+- Tests: offline suites `test_031_empty_answers.py`, `test_031_fetch_content.py`,
+  `test_031_redaction.py`, `test_031_budget.py` and `test_031_netguard.py` pin the
+  new rules — empty versus malformed containers, truncation reporting, the
+  interstitial shapes that used to be false positives (a "CAPTCHA help" page, a
+  vendor glossary, an FAQ quoting "Just a moment…", a doc showing one
+  `cf_chl_opt` sample, and a help page titled "Access Denied: a practical guide
+  to 403 responses"), the default and opt-in netguard paths (legacy numeric
+  spellings, zone ids, loopback names, resolver timeout, per-URL tool error,
+  redirect fail-closed) and a docs test that rejects SSRF overclaiming.
+  `tests/conftest.py` clears `WEB_RETRIEVAL_*` and stubs `netguard._resolve`, so
+  the offline suite never touches DNS; the live-provider file stays skipped
+  unless it is explicitly enabled.
 
 ## 0.3.0 — 2026-10-23
 

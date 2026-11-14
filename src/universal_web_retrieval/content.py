@@ -25,15 +25,18 @@ Two jobs, both about the payload telling the truth about itself.
       "enable javascript and cookies to continue", ``_incapsula_resource``…); or
     * the **title is a challenge title** ("Just a moment...", "Access Denied",
       "Attention Required! | Cloudflare"…) *and* the body carries at least one
-      marker, technical or prose.
+      marker, technical or prose. The title must be the whole title or the
+      challenge phrase followed by the site's own short label — a subtitle
+      ("Access Denied: a practical guide to 403 responses") is prose, not a wall.
 
     A single marker is never enough, so a help page that explains CAPTCHA, a
     glossary that lists reCAPTCHA/hCaptcha/Turnstile, an FAQ quoting "Just a
     moment...", or a doc showing one ``cf_chl_opt`` sample all pass through
     untouched (they were killed by the earlier title-word rule). False
     negatives remain possible — a novel interstitial, a JS-only page that
-    returns an empty shell — and are preferred: a false negative costs one
-    useless result, a false positive silently hides a real page.
+    returns an empty shell, a brand-like subtitle ("Access Denied | Mozilla
+    Support") — and are preferred: a false negative costs one useless result,
+    a false positive silently hides a real page.
 
     ``UWR_BLOCK_DETECTION=off`` disables both the check and nothing else; it
     does not change truncation reporting.
@@ -111,6 +114,26 @@ BODY_MARKERS: Tuple[str, ...] = TECHNICAL_MARKERS + HINT_MARKERS
 _TITLE_SEPARATORS = ("...", " |", " -", " —", " –", " (", "!", ":", ".")
 
 
+# Words that belong to a subtitle and never to a site's own label. "Access
+# Denied: a practical guide to 403 responses" is a help page; "Access Denied -
+# example.com" is a wall. A suffix containing any of these is a phrase.
+_SUBTITLE_WORDS = frozenset({
+    "a", "an", "the", "to", "of", "for", "and", "or", "how", "why", "what",
+    "when", "where", "your", "you", "is", "are", "in", "on", "with", "from",
+})
+
+# A site label is short; anything longer is prose that happens to follow a colon.
+_SUFFIX_MAX_WORDS = 4
+
+
+def _is_site_label(suffix: str) -> bool:
+    """True when a title suffix reads as the site's own label, not a subtitle."""
+    words = suffix.split()
+    if not words or len(words) > _SUFFIX_MAX_WORDS:
+        return False
+    return not any(word.strip(",;:") in _SUBTITLE_WORDS for word in words)
+
+
 def truncate(text: str, limit: int | None = None) -> Tuple[str, bool, int]:
     """Cut ``text`` to the extract limit, reporting whether it was cut.
 
@@ -136,9 +159,11 @@ def challenge_title(title: str) -> str:
     """Return the challenge title ``title`` matches, or ``''``.
 
     A match is the whole title ("Access Denied") or the title followed by a
-    separator and the site's own suffix ("Access Denied - example.com"). A help
-    page that merely contains the words — "CAPTCHA help", "Access Denied errors
-    explained" — is not a match.
+    separator and the site's own label ("Access Denied - example.com"). A help
+    page that merely contains the words — "CAPTCHA help" — is not a match, and
+    neither is a title whose suffix is a subtitle: "Access Denied: a practical
+    guide to 403 responses" is prose after a colon, not a page that is denying
+    access.
     """
     normalised = _norm_title(title)
     if not normalised:
@@ -148,10 +173,11 @@ def challenge_title(title: str) -> str:
             return marker
         if normalised.startswith(marker):
             rest = normalised[len(marker):]
-            if any(rest.startswith(sep) for sep in _TITLE_SEPARATORS):
-                return marker
-            # "Just a moment..." normalises to "just a moment." after strip.
-            if rest.strip(" .:!|") == "":
+            if not any(rest.startswith(sep) for sep in _TITLE_SEPARATORS):
+                continue
+            suffix = rest.lstrip(" .:!|—-–(").strip()
+            # "Just a moment..." normalises to "just a moment..." — no suffix.
+            if suffix == "" or _is_site_label(suffix):
                 return marker
     return ""
 

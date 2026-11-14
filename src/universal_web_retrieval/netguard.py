@@ -18,6 +18,9 @@ provider sees the URL:
   dodge the check. A **numeric-only host that cannot be decoded** (``1.2.3.4.5``,
   ``09.1.1.1``) is refused: it cannot be a domain name, and guessing is the
   wrong direction for a deny check.
+* A **loopback name** is refused without DNS: ``localhost``, ``localhost.`` and
+  any ``*.localhost`` are reserved for loopback (RFC 6761), so a resolver that
+  answers ``NXDOMAIN`` for one must not turn into an allow.
 * A **hostname** goes through ``socket.getaddrinfo`` — the platform resolver, so
   ``/etc/hosts``, systemd-resolved and every host-level control still apply. We
   deliberately do not implement our own DNS client: bypassing the dependent
@@ -46,8 +49,9 @@ provider's network, so there is nothing here to bind a connection to:
 * **A hostname that does not resolve here is still allowed** (logged at DEBUG).
   The provider resolves it on its own network, so a definitive ``NXDOMAIN``
   proves nothing about the provider's view. Residual gap: an internal-only name
-  that only resolves inside the private network is not blocked. A *timeout* is
-  different from ``NXDOMAIN`` and is refused above.
+  that only resolves inside the private network is not blocked. ``localhost``
+  and ``*.localhost`` are the exception and are refused without DNS, as above.
+  A *timeout* is different from ``NXDOMAIN`` and is refused above.
 * **The resolver is only as trustworthy as the host**: a host with a poisoned or
   overridden resolver gets the answer that resolver gives.
 
@@ -103,6 +107,17 @@ def _host_and_port(url: str) -> tuple:
     except ValueError as exc:
         raise InvalidInputError("URL has an invalid port") from exc
     return scheme, host, port
+
+
+# Names RFC 6761 reserves for loopback. They are decided without DNS so that a
+# resolver which fails (or stalls below the check) cannot turn one into an allow.
+_LOOPBACK_NAMES = frozenset({"localhost", "localhost.localdomain",
+                             "ip6-localhost", "ip6-loopback"})
+
+
+def _is_loopback_name(host: str) -> bool:
+    name = host.rstrip(".").lower()
+    return name in _LOOPBACK_NAMES or name.endswith(".localhost")
 
 
 def _resolve(host: str, port: int) -> List[str]:
@@ -237,6 +252,11 @@ def check_url(url: str, *, block_private: bool | None = None) -> None:
         if not literal.is_global:
             raise _reject(host, f"{literal} is not a public address")
         return
+
+    if _is_loopback_name(host):
+        # Decided here, not by the resolver: "it did not resolve" must never be
+        # the reason a name reserved for loopback is allowed.
+        raise _reject(host, "it is a loopback name (localhost / *.localhost)")
 
     timeout = config.netguard_dns_timeout()
     try:

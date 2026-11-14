@@ -221,6 +221,26 @@ def test_unresolvable_hostname_is_allowed_and_logged_when_blocking(monkeypatch, 
     assert "only-internal.example" in caplog.text
 
 
+@pytest.mark.parametrize("url", ["http://localhost:8080/",
+                                 "http://api.localhost/",
+                                 "http://localhost./"])
+def test_loopback_names_are_refused_without_dns_when_blocking(monkeypatch, url):
+    """A failed lookup for ``localhost`` must not become an allow.
+
+    ``localhost`` and ``*.localhost`` are reserved for loopback (RFC 6761), so
+    they are decided here instead of being handed to a resolver whose NXDOMAIN
+    would fall into the "does not resolve here, allow it" gap.
+    """
+    monkeypatch.setenv("WEB_RETRIEVAL_BLOCK_PRIVATE", "1")
+
+    def boom(host, port):
+        raise socket.gaierror("no such host")
+
+    monkeypatch.setattr(netguard, "_resolve", boom)
+    with pytest.raises(InvalidInputError):
+        netguard.check_url(url)
+
+
 def test_error_names_the_opt_in_variable(monkeypatch):
     monkeypatch.setenv("WEB_RETRIEVAL_BLOCK_PRIVATE", "1")
     with pytest.raises(InvalidInputError) as exc:
