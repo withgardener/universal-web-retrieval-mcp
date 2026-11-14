@@ -53,7 +53,7 @@ import httpx
 
 from .. import config
 from ..errors import (AuthMode, Capability, FetchResult, Provider, ProviderError,
-                      SearchResult)
+                      SearchResult, result_container)
 
 MAX_LIMIT = 20          # official: limit must be between 1 and 20
 MAX_SITES = 5           # search_pro only
@@ -147,7 +147,7 @@ class KimiProvider(Provider):
 
             data = resp.json()
             rows = []
-            for item in (data.get("search_results") or []):
+            for item in result_container(data, "search_results", provider=self.NAME):
                 url = str(item.get("url") or "").strip()
                 if not url:
                     continue
@@ -172,9 +172,7 @@ class KimiProvider(Provider):
                 })
                 if len(rows) >= limit:
                     break
-            if not rows:
-                # Empty search_results is a documented, non-billable answer.
-                raise ProviderError("no results")
+            # Empty search_results is a documented, non-billable ANSWER (0.3.1).
             return SearchResult(results=rows, provider=self.NAME, mode=AuthMode.KEYED)
         result, elapsed = self._timed(_call)
         result.latency_ms = elapsed

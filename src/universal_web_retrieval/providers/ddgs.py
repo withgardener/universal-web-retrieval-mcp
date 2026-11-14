@@ -48,8 +48,7 @@ class DDGSProvider(Provider):
                 rows.append({"title": str(hit.get("title", "")),
                              "url": str(hit.get("href") or hit.get("url") or ""),
                              "snippet": str(hit.get("body", ""))})
-        if not rows:
-            raise ProviderError("no results")
+        # Empty hits from a well-formed reply is an ANSWER, not an error (0.3.1).
         return SearchResult(results=rows, provider=self.NAME, mode=self.mode())
 
     def fetch(self, url: str, timeout_override: float | None = None) -> FetchResult:

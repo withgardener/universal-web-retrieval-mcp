@@ -12,7 +12,8 @@ from __future__ import annotations
 import httpx
 
 from .. import config
-from ..errors import AuthMode, FetchResult, Provider, ProviderError, SearchResult, classify_http_error
+from ..errors import (AuthMode, FetchResult, Provider, ProviderError, SearchResult,
+                      classify_http_error, result_container)
 
 
 class TavilyProvider(Provider):
@@ -38,9 +39,10 @@ class TavilyProvider(Provider):
                                           authenticated=(self.mode() == AuthMode.KEYED))
             rows = [{"title": str(x.get("title", "")), "url": str(x.get("url", "")),
                      "snippet": str(x.get("content", ""))}
-                    for x in resp.json().get("results", [])]
-            if not rows:
-                raise ProviderError("no results")
+                    for x in result_container(resp.json(), "results",
+                                              provider=self.NAME)]
+            # Empty hits from a well-formed reply is an ANSWER, not an error
+            # (0.3.1): the router reports the link as `empty` and keeps walking.
             return SearchResult(results=rows, provider=self.NAME, mode=self.mode())
         result, elapsed = self._timed(_call)
         result.latency_ms = elapsed

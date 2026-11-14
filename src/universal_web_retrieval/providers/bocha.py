@@ -35,7 +35,7 @@ import httpx
 
 from .. import config
 from ..errors import (AuthMode, Capability, FetchResult, Provider, ProviderError,
-                      SearchResult, classify_http_error)
+                      SearchResult, classify_http_error, result_container)
 
 MAX_COUNT = 50
 
@@ -90,7 +90,8 @@ class BochaProvider(Provider):
                     raise ProviderError(f"bocha rate limited: {msg[:200]}")
                 raise ProviderError(f"bocha code {code}: {msg[:200]}")
             body = data.get("data") if isinstance(data, dict) else None
-            pages = ((body or {}).get("webPages") or {}).get("value") or []
+            pages = result_container(body if body is not None else {},
+                                     "webPages", "value", provider=self.NAME)
             rows = []
             for page in pages:
                 url = str(page.get("url") or "").strip()
@@ -105,8 +106,8 @@ class BochaProvider(Provider):
                 })
                 if len(rows) >= limit:
                     break
-            if not rows:
-                raise ProviderError("no results")
+            # Empty hits from a well-formed reply is an ANSWER, not an error
+            # (0.3.1): the router reports the link as `empty` and keeps walking.
             return SearchResult(results=rows, provider=self.NAME, mode=AuthMode.KEYED)
         result, elapsed = self._timed(_call)
         result.latency_ms = elapsed

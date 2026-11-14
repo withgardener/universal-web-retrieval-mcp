@@ -41,7 +41,7 @@ import httpx
 
 from .. import config
 from ..errors import (AuthMode, Capability, FetchResult, Provider, ProviderError,
-                      SearchResult, classify_http_error)
+                      SearchResult, classify_http_error, result_container)
 
 MAX_COUNT = 20
 MAX_QUERY_CHARS = 600
@@ -99,7 +99,7 @@ class BraveProvider(Provider):
 
             data = resp.json()
             rows = []
-            for item in ((data.get("web") or {}).get("results") or []):
+            for item in result_container(data, "web", "results", provider=self.NAME):
                 url = str(item.get("url") or "").strip()
                 if not url:
                     continue
@@ -116,8 +116,8 @@ class BraveProvider(Provider):
                 })
                 if len(rows) >= limit:
                     break
-            if not rows:
-                raise ProviderError("no results")
+            # Empty hits from a well-formed reply is an ANSWER, not an error
+            # (0.3.1): the router reports the link as `empty` and keeps walking.
             return SearchResult(results=rows, provider=self.NAME, mode=AuthMode.KEYED)
         result, elapsed = self._timed(_call)
         result.latency_ms = elapsed

@@ -60,6 +60,35 @@ def classify_http_error(status: int, body: str, *, authenticated: bool) -> Provi
     return ProviderError(f"HTTP {status}: {text}")
 
 
+def result_container(payload: Any, *path: str, provider: str) -> list:
+    """Return the results list at ``path`` inside a *successful* reply.
+
+    The 0.3.1 rule that separates "nothing to say" from "the call failed" lives
+    here, in one place:
+
+    * the container is **missing** (schema change, gateway error page, truncated
+      JSON) -> malformed reply -> ``ProviderError``;
+    * the container is present and **empty** -> the provider honestly found
+      nothing -> an empty *answer*, returned to the caller so the router can
+      report ``empty`` instead of ``all providers failed``.
+
+    ``path`` is the key chain to the list, e.g. ``("data", "results")``.
+    """
+    node: Any = payload
+    for key in path:
+        if not isinstance(node, dict) or key not in node:
+            raise ProviderError(
+                f"{provider}: malformed response (missing {'/'.join(path)})")
+        node = node[key]
+    if node is None:
+        return []
+    if not isinstance(node, list):
+        raise ProviderError(
+            f"{provider}: malformed response ({'/'.join(path)} is "
+            f"{type(node).__name__}, not a list)")
+    return node
+
+
 @dataclass
 class FetchResult:
     url: str

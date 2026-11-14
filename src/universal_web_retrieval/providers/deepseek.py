@@ -52,7 +52,7 @@ import httpx
 
 from .. import config
 from ..errors import (AuthMode, Capability, FetchResult, Provider, ProviderError,
-                      SearchResult, classify_http_error)
+                      SearchResult, classify_http_error, result_container)
 
 MAX_COUNT = 50
 MAX_QUERY_CHARS = 128
@@ -95,7 +95,7 @@ class DeepSeekProvider(Provider):
                 raise classify_http_error(resp.status_code, resp.text, authenticated=True)
             data = resp.json()
             rows = []
-            for item in (data.get("results") or []):
+            for item in result_container(data, "results", provider=self.NAME):
                 url = str(item.get("url") or "").strip()
                 if not url:
                     continue
@@ -109,11 +109,9 @@ class DeepSeekProvider(Provider):
                 })
                 if len(rows) >= limit:
                     break
-            if not rows:
-                # Official docs: "a normal search with no matches returns an empty
-                # array" — an empty list is a valid, non-billable answer, but for
-                # chain purposes an empty result must not silently end the walk.
-                raise ProviderError("no results")
+            # Official docs: "a normal search with no matches returns an empty
+            # array" — from 0.3.1 that is an empty ANSWER, not an error, and the
+            # router keeps walking the chain on its own.
             return SearchResult(results=rows, provider=self.NAME, mode=AuthMode.KEYED)
         result, elapsed = self._timed(_call)
         result.latency_ms = elapsed

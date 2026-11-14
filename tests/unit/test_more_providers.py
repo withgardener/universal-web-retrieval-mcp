@@ -356,12 +356,12 @@ class TestKimiSearch:
         assert "HTTP 400" in str(cm.value)
         assert cm.value.fallback_eligible is True
 
-    def test_empty_results_raises(self, monkeypatch):
+    def test_empty_results_returns_empty_answer(self, monkeypatch):
+        # 0.3.1: a present-but-empty container is an empty ANSWER.
         monkeypatch.setenv("MOONSHOT_API_KEY", "k")
         with patch('universal_web_retrieval.providers.kimi.httpx.post',
                    return_value=_resp({"search_results": []})):
-            with pytest.raises(ProviderError):
-                self.p.search("q", 5)
+            assert self.p.search("q", 5).results == []
 
     def test_missing_key_raises(self):
         with pytest.raises(ProviderError):
@@ -573,12 +573,12 @@ class TestZhipu:
                 self.p.search("q", 5)
         assert cm.value.auth_failure is True
 
-    def test_empty_result_raises(self, monkeypatch):
+    def test_empty_result_returns_empty_answer(self, monkeypatch):
+        # 0.3.1: a present-but-empty container is an empty ANSWER.
         monkeypatch.setenv("ZHIPU_API_KEY", "k")
         with patch('universal_web_retrieval.providers.zhipu.httpx.post',
                    return_value=_resp({"search_result": []})):
-            with pytest.raises(ProviderError):
-                self.p.search("q", 5)
+            assert self.p.search("q", 5).results == []
 
     def test_base_url_override(self, monkeypatch):
         monkeypatch.setenv("ZHIPU_API_KEY", "k")
@@ -705,12 +705,12 @@ class TestBrave:
                 self.p.search("q", 5)
         assert "429" in str(cm.value)
 
-    def test_empty_results_raises(self, monkeypatch):
+    def test_empty_results_returns_empty_answer(self, monkeypatch):
+        # 0.3.1: a present-but-empty container is an empty ANSWER.
         monkeypatch.setenv("BRAVE_API_KEY", "k")
         with patch('universal_web_retrieval.providers.brave.httpx.get',
                    return_value=_resp({"type": "search", "web": {"results": []}})):
-            with pytest.raises(ProviderError):
-                self.p.search("q", 5)
+            assert self.p.search("q", 5).results == []
 
     def test_missing_web_key_raises(self, monkeypatch):
         monkeypatch.setenv("BRAVE_API_KEY", "k")

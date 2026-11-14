@@ -238,12 +238,12 @@ class TestYuanbao:
                 self.p.search("q", 5)
         assert cm.value.auth_failure is True
 
-    def test_empty_pages_raises(self, monkeypatch):
+    def test_empty_pages_returns_empty_answer(self, monkeypatch):
+        # 0.3.1: a present-but-empty Pages array is an empty ANSWER.
         monkeypatch.setenv("YUANBAO_API_KEY", "k")
         with patch('universal_web_retrieval.providers.yuanbao.httpx.post',
                    side_effect=FakeMCP({"Response": {"Pages": []}})):
-            with pytest.raises(ProviderError):
-                self.p.search("q", 5)
+            assert self.p.search("q", 5).results == []
 
     def test_missing_key_raises(self):
         with pytest.raises(ProviderError):
@@ -343,12 +343,12 @@ class TestBocha:
         assert "rate limited" in str(cm.value)
         assert cm.value.auth_failure is False
 
-    def test_empty_payload_raises(self, monkeypatch):
+    def test_empty_payload_returns_empty_answer(self, monkeypatch):
+        # 0.3.1: a present-but-empty value array is an empty ANSWER.
         monkeypatch.setenv("BOCHA_API_KEY", "k")
         with patch('universal_web_retrieval.providers.bocha.httpx.post',
                    return_value=_resp({"code": 200, "data": {"webPages": {"value": []}}})):
-            with pytest.raises(ProviderError):
-                self.p.search("q", 5)
+            assert self.p.search("q", 5).results == []
 
     def test_missing_key_raises(self):
         with pytest.raises(ProviderError):
@@ -467,12 +467,12 @@ class TestDeepSeek:
         assert "429" in str(cm.value)
         assert cm.value.auth_failure is False
 
-    def test_empty_results_raises(self, monkeypatch):
+    def test_empty_results_returns_empty_answer(self, monkeypatch):
+        # 0.3.1: a present-but-empty container is an empty ANSWER.
         monkeypatch.setenv("DEEPSEEK_API_KEY", "k")
         with patch('universal_web_retrieval.providers.deepseek.httpx.post',
                    return_value=_resp({"results": []})):
-            with pytest.raises(ProviderError):
-                self.p.search("q", 5)
+            assert self.p.search("q", 5).results == []
 
     def test_missing_key_raises(self):
         with pytest.raises(ProviderError):

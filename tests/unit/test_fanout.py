@@ -212,9 +212,9 @@ def test_n_limits_providers_queried(monkeypatch):
     assert [p.calls for p in providers] == [1, 1, 0, 0]
     assert [a for a in result.attempts] == [
         {"provider": "p0", "outcome": "ok", "results": 1,
-         "latency_ms": result.attempts[0]["latency_ms"]},
+         "latency_ms": result.attempts[0]["latency_ms"], "mode": "keyless"},
         {"provider": "p1", "outcome": "ok", "results": 1,
-         "latency_ms": result.attempts[1]["latency_ms"]},
+         "latency_ms": result.attempts[1]["latency_ms"], "mode": "keyless"},
         {"provider": "p2", "outcome": "skipped:fanout"},
         {"provider": "p3", "outcome": "skipped:fanout"},
     ]
@@ -299,7 +299,7 @@ def test_grace_cutoff_marks_stragglers_skipped(monkeypatch):
     assert elapsed < 0.9, f"grace period was not honoured: {elapsed:.2f}s"
     assert result.attempts == [
         {"provider": "fast", "outcome": "ok", "results": 1,
-         "latency_ms": result.attempts[0]["latency_ms"]},
+         "latency_ms": result.attempts[0]["latency_ms"], "mode": "keyless"},
         {"provider": "slow", "outcome": "skipped:grace"},
     ]
     assert all(r["sources"] == ["fast"] for r in result.results)
@@ -429,7 +429,8 @@ def test_an_empty_provider_contributes_nothing_but_does_not_fail(monkeypatch):
     r = router_with(empty, good)
     result = r.search("q", 5)
     assert result.attempts[0] == {"provider": "empty", "outcome": "ok", "results": 0,
-                                  "latency_ms": result.attempts[0]["latency_ms"]}
+                                  "latency_ms": result.attempts[0]["latency_ms"],
+                                  "mode": "keyless"}
     assert [r_["sources"] for r_ in result.results] == [["good"]]
 
 
@@ -446,9 +447,9 @@ def test_all_empty_answers_are_a_success_with_no_rows(monkeypatch):
     assert result.mode is AuthMode.KEYLESS
     assert result.attempts == [
         {"provider": "first", "outcome": "ok", "results": 0,
-         "latency_ms": result.attempts[0]["latency_ms"]},
+         "latency_ms": result.attempts[0]["latency_ms"], "mode": "keyless"},
         {"provider": "second", "outcome": "ok", "results": 0,
-         "latency_ms": result.attempts[1]["latency_ms"]},
+         "latency_ms": result.attempts[1]["latency_ms"], "mode": "keyless"},
     ]
     payload = result.to_dict()
     assert payload["success"] is True

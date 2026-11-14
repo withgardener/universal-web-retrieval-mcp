@@ -41,9 +41,10 @@ class TestAnySearchParsing(unittest.TestCase):
 
     @patch('universal_web_retrieval.providers.anysearch.httpx.post')
     def test_empty_results(self, mock_post):
+        # 0.3.1: an empty result list is an empty ANSWER, not an error. The
+        # router reports it as `empty` and keeps walking the chain.
         mock_post.return_value = self._mock_response({"code": 0, "data": {"results": []}})
-        with self.assertRaises(ProviderError):
-            self.p.search("q", 5)
+        assert self.p.search("q", 5).results == []
 
     @patch('universal_web_retrieval.providers.anysearch.httpx.post')
     def test_malformed_payload(self, mock_post):
@@ -162,9 +163,9 @@ class TestDDGSNormalization(unittest.TestCase):
 
     @patch('universal_web_retrieval.providers.ddgs.DDGSProvider._client')
     def test_text_empty(self, mock_client):
+        # 0.3.1: zero hits is an empty ANSWER, not an error.
         mock_client.return_value = self._fake_client(text_rows=[])
-        with self.assertRaises(ProviderError):
-            self.p.search("q", 5)
+        assert self.p.search("q", 5).results == []
 
     @patch('universal_web_retrieval.providers.ddgs.DDGSProvider._client')
     def test_text_package_exception(self, mock_client):

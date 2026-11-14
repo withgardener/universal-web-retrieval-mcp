@@ -43,7 +43,7 @@ import httpx
 
 from .. import config
 from ..errors import (AuthMode, Capability, FetchResult, Provider, ProviderError,
-                      SearchResult, classify_http_error)
+                      SearchResult, classify_http_error, result_container)
 
 MAX_COUNT = 50
 MAX_QUERY_CHARS = 70     # schema maxLength on search_query
@@ -123,7 +123,7 @@ class ZhipuProvider(Provider):
                 raise ProviderError(f"zhipu error: {message[:200] or 'provider returned an error envelope'}")
 
             rows = []
-            for item in (payload.get("search_result") or []):
+            for item in result_container(payload, "search_result", provider=self.NAME):
                 link = str(item.get("link") or "").strip()
                 if not link:
                     continue
@@ -136,8 +136,8 @@ class ZhipuProvider(Provider):
                 })
                 if len(rows) >= limit:
                     break
-            if not rows:
-                raise ProviderError("no results")
+            # Empty hits from a well-formed reply is an ANSWER, not an error
+            # (0.3.1): the router reports the link as `empty` and keeps walking.
             return SearchResult(results=rows, provider=self.NAME, mode=AuthMode.KEYED)
         result, elapsed = self._timed(_call)
         result.latency_ms = elapsed

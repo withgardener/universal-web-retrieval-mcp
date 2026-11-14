@@ -48,6 +48,8 @@ from ..errors import (AuthMode, Capability, FetchResult, Provider, ProviderError
 log = logging.getLogger("universal_web_retrieval.yuanbao")
 
 ALLOWED_CNT = (10, 20, 30, 40, 50)
+# Keys any of which carries the result array in a SearchPro / API-3.0 reply.
+PAGE_CONTAINER_KEYS = ("Pages", "pages", "Results", "results", "Data", "data")
 MAX_QUERY_BYTES = 1500
 PROTOCOL_VERSION = "2025-06-18"
 TOOL_NAME = "SearchPro"
@@ -315,6 +317,11 @@ class YuanbaoProvider(Provider):
             payload = self._payload_from_result(result)
             if payload.get("Error"):
                 raise _classify_rpc_error(payload)
+            if not any(key in payload for key in PAGE_CONTAINER_KEYS):
+                # A 200 with no Pages container is a malformed reply, not an
+                # empty answer (0.3.1): an empty *list* is the empty answer.
+                raise ProviderError(
+                    "yuanbao: malformed response (no Pages container)")
             rows = []
             for page in _pages(payload):
                 url = str(page.get("url") or "").strip()
@@ -330,8 +337,8 @@ class YuanbaoProvider(Provider):
                 })
                 if len(rows) >= limit:
                     break
-            if not rows:
-                raise ProviderError("yuanbao: no results")
+            # Empty hits from a well-formed reply is an ANSWER, not an error
+            # (0.3.1): the router reports the link as `empty` and keeps walking.
             return SearchResult(results=rows, provider=self.NAME, mode=AuthMode.KEYED)
         result, elapsed = self._timed(_call)
         result.latency_ms = elapsed

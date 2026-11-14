@@ -254,6 +254,11 @@ class ProviderRouter:
             deadline = time.monotonic() + config.chain_deadline()
         attempts: List[Dict[str, str]] = []
         errors: List[str] = []
+        # First OK answer that carried no rows. 0.3.1: an empty answer is a real
+        # answer, not a failure — we keep walking (a later link may have hits)
+        # but if nothing produces hits the call SUCCEEDS with `results: []`
+        # instead of reporting "all providers failed".
+        empty_result: Optional[Any] = None
 
         def _skip(name: str, reason: str) -> None:
             attempts.append({"provider": name, "outcome": f"skipped:{reason}"})
@@ -280,6 +285,16 @@ class ProviderRouter:
                                              timeout_override=remaining)
                 else:
                     result = provider.fetch(kwargs["url"], timeout_override=remaining)
+                hits = (list(getattr(result, "results", None) or [])
+                        if capability == Capability.SEARCH else None)
+                if hits is not None and not hits:
+                    # A well-formed SEARCH answer with zero rows: record it and
+                    # keep the walk going. The first one is the fallback success.
+                    attempts.append({"provider": name, "outcome": "empty"})
+                    if empty_result is None:
+                        empty_result = result
+                        empty_result.attempts = list(attempts)
+                    continue
                 result.attempts = attempts + [{"provider": name, "outcome": "ok"}]
                 return result
             except ProviderError as exc:
@@ -294,6 +309,12 @@ class ProviderRouter:
             except Exception as exc:  # noqa: BLE001 — unknown errors are still chain-eligible
                 attempts.append({"provider": name, "outcome": f"error:{str(exc)[:150]}"})
                 errors.append(f"{name}: {str(exc)[:150]}")
+        if empty_result is not None:
+            # At least one link answered OK (with zero rows) and none produced
+            # hits: that is a successful empty result, not a chain failure. The
+            # trail is rebuilt so it also shows the attempts that came after.
+            empty_result.attempts = list(attempts)
+            return empty_result
         raise _with_attempts("all providers failed: " + " | ".join(errors), attempts)
 
     # ---- fan-out -------------------------------------------------------
@@ -357,7 +378,8 @@ class ProviderRouter:
                 if record["outcome"] == "ok":
                     out.append({"provider": name, "outcome": "ok",
                                 "results": record["results"],
-                                "latency_ms": record["latency_ms"]})
+                                "latency_ms": record["latency_ms"],
+                                "mode": _mode_name(record["mode"])})
                 elif record["outcome"].startswith("skipped:"):
                     out.append({"provider": name, "outcome": record["outcome"]})
                 else:
@@ -441,8 +463,11 @@ class ProviderRouter:
             for name, record in arrived:
                 received += 1
                 records[name] = record
-                if (record["outcome"] == "ok" and record["results"]
-                        and record["finished_at"] <= deadline):
+                # Any OK answer starts the grace clock, empty or not (0.3.1): an
+                # empty answer is a real answer, and waiting the full deadline
+                # for stragglers after it would make "no matches" the slowest
+                # possible query.
+                if record["outcome"] == "ok" and record["finished_at"] <= deadline:
                     finished = record["finished_at"]
                     if first_ok_at is None or finished < first_ok_at:
                         first_ok_at = finished
