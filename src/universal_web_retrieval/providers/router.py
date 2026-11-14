@@ -45,6 +45,7 @@ import time
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .. import config
+from .. import netguard
 from ..errors import (AuthMode, Capability, InvalidInputError, Provider, ProviderError,
                       SearchResult, FetchResult)
 from ..fanout import merge_results
@@ -244,8 +245,32 @@ class ProviderRouter:
             raise InvalidInputError("url must be a non-empty string")
         if not url.lower().startswith(("http://", "https://")):
             raise InvalidInputError(f"unsupported URL scheme: {url[:50]}")
-        return self._walk(Capability.FETCH, url=url, deadline=deadline,
-                          providers=providers)
+        # Refuse private/loopback/link-local targets before any provider sees
+        # them (0.3.1). See netguard for exactly what this can and cannot prove.
+        netguard.check_url(url)
+        result = self._walk(Capability.FETCH, url=url, deadline=deadline,
+                            providers=providers)
+        self._check_reported_url(result, requested=url)
+        return result
+
+    @staticmethod
+    def _check_reported_url(result: FetchResult, *, requested: str) -> None:
+        """Re-validate a final URL a provider reports after following redirects.
+
+        The hop already happened on the provider's network, so this can only
+        fail closed for the caller — but silently returning intranet content as
+        if it were the requested page is worse than an error.
+        """
+        final = (getattr(result, "url", "") or "").strip()
+        if not final or final == requested:
+            return
+        if not final.lower().startswith(("http://", "https://")):
+            return
+        try:
+            netguard.check_url(final)
+        except InvalidInputError as exc:
+            raise ProviderError(
+                f"{result.provider}: redirected to a non-public host: {exc}") from None
 
     # ---- execution -----------------------------------------------------
     def _walk(self, capability: Capability, *, deadline: Optional[float],

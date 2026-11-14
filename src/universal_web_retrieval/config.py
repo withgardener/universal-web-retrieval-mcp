@@ -228,6 +228,17 @@ def block_detection_max_chars() -> int:
     return _int_env("UWR_BLOCK_DETECTION_MAX_CHARS", 4000)
 
 
+def allow_private_network() -> bool:
+    """``UWR_ALLOW_PRIVATE_NETWORK``: allow web_fetch to target private space.
+
+    Default is OFF: loopback, link-local, CGNAT and RFC1918 targets are rejected
+    before any provider is called. Setting it to ``1``/``true``/``yes``/``on``
+    restores the pre-0.3.1 behaviour for operators who fetch intranet pages.
+    """
+    value = (os.environ.get("UWR_ALLOW_PRIVATE_NETWORK") or "").strip().lower()
+    return value in ("1", "true", "yes", "on", "allow")
+
+
 def log_level() -> str:
     return os.environ.get("WEB_RETRIEVAL_LOG_LEVEL", "WARNING").upper()
 

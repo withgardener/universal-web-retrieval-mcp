@@ -33,3 +33,23 @@ def _hermetic_env(monkeypatch):
         if name.startswith("UWR_") or name in _CLEARED_KEYS:
             monkeypatch.delenv(name, raising=False)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_dns(monkeypatch):
+    """No test may depend on the host resolver.
+
+    ``web_fetch`` resolves the target host to decide whether it is public
+    (0.3.1), so an unpatched resolver would make the suite depend on the CI
+    host's DNS. Only ``netguard._resolve`` is stubbed — patching
+    ``socket.getaddrinfo`` itself would also redirect httpx and turn a stubbed
+    test into a real connection attempt. Tests that need a specific answer
+    patch ``netguard._resolve`` themselves, which overrides this default.
+    """
+    from universal_web_retrieval import netguard
+
+    def fake(host, port):
+        return ["93.184.216.34"]
+
+    monkeypatch.setattr(netguard, "_resolve", fake)
+    yield
