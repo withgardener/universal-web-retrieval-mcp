@@ -30,7 +30,7 @@ import logging
 
 import pytest
 
-from universal_web_retrieval import config, server
+from universal_web_retrieval import server
 from universal_web_retrieval.errors import (AuthMode, FetchResult, ProviderError,
                                             SearchResult)
 from universal_web_retrieval.redact import (scrub_diagnostic, scrub_exact_secrets)
@@ -40,7 +40,7 @@ SIGNED = "https://cdn.example/pic.jpg?token=abc123&sig=deadbeef&X-Amz-Date=20260
 
 # ---------------------------------------------------------------- primitives
 def test_scrub_diagnostic_redacts_url_credentials_but_keeps_keys():
-    out = scrub_diagnostic(f"failed on https://api.example/v1?api_key=SECRET&q=1")
+    out = scrub_diagnostic("failed on https://api.example/v1?api_key=SECRET&q=1")
     assert "SECRET" not in out
     assert "api_key=" in out          # the parameter name stays: it aids diagnosis
     assert "q=1" in out

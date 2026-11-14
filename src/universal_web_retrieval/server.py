@@ -63,10 +63,12 @@ app = MCPServer(
 @app.tool(name="web_search", description=(
     "Web search through a configurable provider chain with automatic failover. "
     "Two modes: `mode=\"failover\"` (default) walks the chain one provider at a time "
-    "and returns the first success (including an empty answer); `mode=\"fanout\"` queries up to UWR_SEARCH_FANOUT "
-    "providers concurrently, then merges and rank-fuses the results (even an all-empty "
-    "set of OK answers succeeds with `results: []`; provider=\"fanout\", every row "
-    "carries `sources`; costs N× provider quota per search). "
+    "and returns the first success; `mode=\"fanout\"` queries up to UWR_SEARCH_FANOUT "
+    "providers concurrently, then merges and rank-fuses the results (provider=\"fanout\", "
+    "every row carries `sources`; costs N× provider quota per search). "
+    "A provider answering OK with zero hits is an empty ANSWER, not an error: failover "
+    "keeps walking but a query with no matches succeeds with `results: []` (attempt "
+    "``{\"outcome\": \"empty\"}``), never \"all providers failed\". "
     "Default chain: AnySearch -> Tavily -> DDGS; operators can reorder/extend it "
     "with UWR_SEARCH_CHAIN (e.g. anysearch,tavily,yuanbao,bocha,deepseek,kimi,ddgs) "
     "and pick the default mode with UWR_SEARCH_MODE. Auth is "
@@ -96,8 +98,14 @@ def web_search_tool(query: str, limit: int = 5, providers: list[str] | None = No
     "with UWR_FETCH_CHAIN). Auth is automatic (keyed when a key is configured, else "
     "official keyless). Accepts a single url string, or urls array (max 5) for "
     "batch. `providers` overrides the chain order for this call. Returns JSON array "
-    "of {url, content, title, content_type, provider, mode, latency_ms, attempts} — "
-    "failed URLs carry an `error` field instead. Note: JS-rendered, login-walled or "
+    "of {url, content, title, content_type, truncated, original_length, provider, "
+    "mode, latency_ms, attempts} — `truncated: true` means `content` was cut at "
+    "WEB_RETRIEVAL_EXTRACT_CHAR_LIMIT and `original_length` is the pre-cut character "
+    "count; failed URLs carry an `error` field instead. A CDN/CAPTCHA interstitial "
+    "(Cloudflare \"Just a moment…\", Akamai \"Access Denied\") is not returned as "
+    "content: it is a fallback-eligible error, so the chain tries the next provider. "
+    "Private, loopback and link-local targets are refused unless the operator set "
+    "UWR_ALLOW_PRIVATE_NETWORK=1. Note: JS-rendered, login-walled or "
     "CAPTCHA-protected pages are not guaranteed."))
 def web_fetch_tool(url: str = "", urls: list[str] | None = None,
                    providers: list[str] | None = None) -> str:
@@ -142,8 +150,9 @@ def web_fetch_tool(url: str = "", urls: list[str] | None = None,
     "List every provider this server knows: capabilities (search/fetch), whether it "
     "is usable right now (configured / key present), whether it is enabled, and its "
     "1-based position in each active chain. Also reports the active search mode "
-    "(failover/fanout) and the fan-out fan width/grace. Never returns key values. "
-    "Use it to decide what to pass in web_search/web_fetch `providers`."))
+    "(failover/fanout), the fan-out fan width/grace, and the fetch policy "
+    "(private-network access, block-page detection, extract limit). Never returns key "
+    "values. Use it to decide what to pass in web_search/web_fetch `providers`."))
 def list_providers_tool() -> str:
     disabled = config.disabled_providers()
     positions = {}
@@ -172,6 +181,11 @@ def list_providers_tool() -> str:
                      "fetch": list(config.DEFAULT_FETCH_CHAIN)},
         "search_mode": config.search_mode(),
         "fanout": {"n": config.fanout_providers(), "grace_s": config.fanout_grace()},
+        "fetch_policy": {
+            "allow_private_network": config.allow_private_network(),
+            "block_detection": config.block_detection_enabled(),
+            "extract_char_limit": config.extract_char_limit(),
+        },
         "disabled": sorted(disabled),
         "providers": rows,
     })

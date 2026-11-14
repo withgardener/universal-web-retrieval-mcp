@@ -195,6 +195,22 @@ def test_router_allows_a_public_final_url(monkeypatch):
     assert r.fetch("https://example.com/a").content == "body"
 
 
+def test_list_providers_reports_the_fetch_policy(monkeypatch):
+    import json
+
+    from universal_web_retrieval import server
+
+    payload = json.loads(server.list_providers_tool())
+    assert payload["fetch_policy"] == {"allow_private_network": False,
+                                      "block_detection": True,
+                                      "extract_char_limit": 15000}
+    monkeypatch.setenv("UWR_ALLOW_PRIVATE_NETWORK", "1")
+    monkeypatch.setenv("UWR_BLOCK_DETECTION", "off")
+    payload = json.loads(server.list_providers_tool())
+    assert payload["fetch_policy"]["allow_private_network"] is True
+    assert payload["fetch_policy"]["block_detection"] is False
+
+
 def test_web_fetch_tool_reports_a_private_url_as_a_per_url_error(monkeypatch):
     """A batch stays usable: the blocked URL is one error row, not a crash."""
     import json

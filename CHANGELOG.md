@@ -2,6 +2,93 @@
 
 All notable changes to this project. Format: Keep a Changelog; versioning: SemVer.
 
+## 0.3.1 — 2026-11-14
+
+Hardening release: five correctness/security fixes, no new provider, no new
+dependency, default chains unchanged.
+
+### Fixed
+
+- **An empty provider answer is an answer, not an error.** Every provider used to
+  raise `ProviderError("no results")` when a well-formed reply contained zero
+  hits, so a query with no matches reported `all providers failed: …` and fan-out
+  recorded `error:no results` — contradicting the documented contract that an
+  all-empty answer set is a successful empty result. New rule, stated once in
+  `errors.result_container()`: a **missing** results container (schema change,
+  gateway error page, truncated JSON) is still a malformed reply and a
+  `ProviderError`; a **present-but-empty** container is an empty answer and
+  returns `SearchResult(results=[])`. Failover records `{"outcome": "empty"}`,
+  keeps walking (a later link may have hits) and returns the first empty answer
+  as a success when nothing produced hits. Fan-out already counted empty OK
+  answers as OK; it now also starts the grace clock on one, so "no matches" is
+  not the slowest possible query. API-level error envelopes (e.g. Zhipu 1703)
+  remain errors: the provider said it failed, we did not merely get nothing.
+- **Fetch truncation is explicit.** Content was cut at
+  `WEB_RETRIEVAL_EXTRACT_CHAR_LIMIT` with nothing in the payload saying so.
+  `FetchResult` now reports `truncated` (bool) and `original_length` (pre-cut
+  character count) and all six fetch providers go through `content.truncate()`.
+  Additive: `content` is still a clean prefix at the limit with no marker text.
+- **CDN/CAPTCHA interstitials are no longer returned as page content.**
+  `content.enforce_not_blocked()` classifies a short body with a challenge title
+  plus a body marker, or three distinct body markers, and raises a
+  fallback-eligible error so the chain tries the next provider. Length alone is
+  never a signal, so short pages and long articles mentioning captchas pass
+  through. `UWR_BLOCK_DETECTION=off` disables it,
+  `UWR_BLOCK_DETECTION_MAX_CHARS` (default 4000) sets the length ceiling.
+- **Successful URLs are no longer rewritten by the redaction regex.** `_json()`
+  applied one global `[?&](token|key|sig|…)="` regex to the whole serialised
+  payload, so every signed URL inside fetched Markdown or a search row came back
+  as `<redacted>` — a broken link. Scrubbing is now structural and split by
+  trust: diagnostic text (`error`, `attempts`, `AUTH FAILURE` log lines) gets the
+  full scrub (configured key values, `NAME=value` assignments, bearer tokens,
+  credential query parameters), while successful payloads only lose exact
+  configured-secret values. New `redact` module;
+  `server._redact_secrets` remains as an alias for the diagnostic scrubber.
+- **A multi-request provider now honours one budget.** Yuanbao made up to five
+  HTTP requests per search (initialize, initialized notification, tools/call,
+  re-handshake + retry), each with the full configured read timeout, so a 20 s
+  budget could take 100 s. New `budget.TimeBudget`: one countdown per provider
+  call, `min(configured, remaining)` per sub-request (connect shares the budget
+  with read), and no new request once `MIN_REQUEST_SECONDS` is left.
+
+### Security
+
+- **`web_fetch` refuses private-network targets by default.** Loopback, RFC1918,
+  link-local, CGNAT and other non-public addresses are rejected before any
+  provider is called (per-URL `invalid input:` error, so a batch keeps working).
+  `UWR_ALLOW_PRIVATE_NETWORK=1` is the explicit opt-in and restores the pre-0.3.1
+  behaviour. New `netguard` module: IP literals (incl. bracketed and
+  IPv4-mapped IPv6, and the decimal `2130706433` form) are decided exactly;
+  hostnames use the platform `socket.getaddrinfo` (so `/etc/hosts`,
+  systemd-resolved and host-level controls still apply — no private DNS client is
+  added and the dependent host's constraints are not bypassed); every returned
+  address must be globally routable, so a public+private answer is rejected. A
+  provider-reported final URL is re-checked and fails the call closed when it is
+  non-public.
+- **Honest limits of that check** (documented in `netguard` and README): the fetch
+  happens on the provider's network, so there is no connection binding — a
+  redirect hop is only caught after it happened, and DNS rebinding between our
+  check and the provider's connect cannot be excluded. A hostname that does not
+  resolve locally is allowed (logged at DEBUG), so an internal-only name is not
+  blocked. Only a design that resolves, connects and verifies the peer address
+  can claim full protection; this is defence in depth, not a sandbox.
+
+### Changed
+
+- `FetchResult.to_dict()` gains `truncated` and `original_length` (additive).
+- `web_search` attempts gain `empty` (failover) and `mode` on fan-out `ok` entries
+  (which auth mode answered); `list_providers` gains `fetch_policy`
+  (`allow_private_network`, `block_detection`, `extract_char_limit`).
+- Behaviour change: fetching a private/loopback/link-local URL now fails unless
+  `UWR_ALLOW_PRIVATE_NETWORK=1`. Default chains, provider order, timeouts and the
+  failover payload shape are otherwise unchanged (the 0.3.0 golden test still
+  passes as-is).
+- Tests: 383 collected, 382 pass, 1 skipped (the opt-in live-provider file).
+  New offline suites: `test_031_empty_answers.py`, `test_031_fetch_content.py`,
+  `test_031_redaction.py`, `test_031_budget.py`, `test_031_netguard.py`; existing
+  tests that pinned "empty means error" were updated with a comment, and
+  `tests/conftest.py` stubs `netguard._resolve` so the suite never touches DNS.
+
 ## 0.3.0 — 2026-10-23
 
 ### Added

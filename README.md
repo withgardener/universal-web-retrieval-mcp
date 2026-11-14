@@ -92,7 +92,7 @@ pip install uwr                    # from PyPI
 uvx uwr                            # or run without installing
 npx -y @withgardener/uwr           # or through the npm launcher
 
-uwr --version                      # uwr 0.3.0
+uwr --version                      # uwr 0.3.1
 uwr                                # run the stdio MCP server
 ```
 
@@ -147,7 +147,10 @@ Unknown names, providers lacking the capability, and disabled providers are drop
 | `WEB_RETRIEVAL_TIMEOUT` | no | Overall chain deadline in seconds (default 45) |
 | `WEB_RETRIEVAL_LOG_LEVEL` | no | `WARNING` default; logs go to **stderr** (stdout is MCP JSON-RPC) |
 | `WEB_RETRIEVAL_MAX_RESULTS` | no | Cap for `web_search.limit` (default 20) |
-| `WEB_RETRIEVAL_EXTRACT_CHAR_LIMIT` | no | Max fetched-content chars (default 15000) |
+| `WEB_RETRIEVAL_EXTRACT_CHAR_LIMIT` | no | Max fetched-content chars (default 15000). Results report `truncated`/`original_length` |
+| `UWR_ALLOW_PRIVATE_NETWORK` | no | `1` allows `web_fetch` to target private/loopback/link-local hosts (default: refused) |
+| `UWR_BLOCK_DETECTION` | no | `off` disables CDN/CAPTCHA interstitial detection in `web_fetch` (default: on) |
+| `UWR_BLOCK_DETECTION_MAX_CHARS` | no | Bodies at/above this many chars are never judged "blocked" (default 4000) |
 | `WEB_RETRIEVAL_ANYSEARCH_CONNECT_TIMEOUT` / `_TIMEOUT` | no | AnySearch connect/read timeouts (5s / 20s) |
 | `WEB_RETRIEVAL_TAVILY_CONNECT_TIMEOUT` / `_TIMEOUT` | no | Tavily connect/read timeouts (5s / 20s) |
 | `WEB_RETRIEVAL_DDGS_TIMEOUT` | no | DDGS overall timeout (15s) |
@@ -191,8 +194,8 @@ When a provider exposes publication date / site (Yuanbao, Bocha, DeepSeek, Kimi,
 {
   "success": true, "provider": "fanout", "mode": "keyed", "latency_ms": 812,
   "attempts": [
-    {"provider": "bocha", "outcome": "ok", "results": 5, "latency_ms": 640},
-    {"provider": "tavily", "outcome": "ok", "results": 5, "latency_ms": 790},
+    {"provider": "bocha", "outcome": "ok", "results": 5, "latency_ms": 640, "mode": "keyed"},
+    {"provider": "tavily", "outcome": "ok", "results": 5, "latency_ms": 790, "mode": "keyed"},
     {"provider": "ddgs", "outcome": "skipped:grace"}
   ],
   "results": [{"title": "...", "url": "...", "snippet": "...", "sources": ["bocha", "tavily"]}]
@@ -203,14 +206,17 @@ When a provider exposes publication date / site (Yuanbao, Bocha, DeepSeek, Kimi,
 
 | Outcome | Meaning |
 |---|---|
-| `ok` | This provider produced the answer |
+| `ok` | This provider produced the answer (fan-out entries also carry `results`, `latency_ms`, `mode`) |
+| `empty` | *(failover)* This provider answered OK with zero hits — an answer, not a failure; the walk continued |
 | `error:<msg>` | Attempted and failed; the chain moved on |
 | `skipped:not_configured` | Keyed-only provider without a key — never called |
 | `skipped:deadline` | The chain deadline passed before this provider could start (failover) or answer (fan-out) |
 | `skipped:grace` | *(fan-out only)* Still running when the grace window after the first answer closed; its result is discarded |
-| `skipped:fanout` | *(fan-out only)* Eligible chain member beyond the configured N-provider fan-out cutoff |
+| `skipped:fanout` | *(fan-out only)* Eligible chain member beyond the configured N-provider fanout cutoff |
 
-**Success schema (search):** `{"success": true, "provider": ..., "mode": ..., "latency_ms": ..., "attempts": [...], "results": [...]}`. **Provider error schema:** `{"success": false, "error": "...", "attempts": [...]}`. **Invalid-input schema:** `{"success": false, "error": "invalid input: ..."}` (no `attempts`). Fetch returns one object per URL with `url`, `content`, `content_type`, `title`, `provider`, `mode`, `latency_ms`, and `attempts`; failed URLs carry `error` and `attempts` instead of success metadata.
+**An empty answer is not an error (0.3.1).** A provider that replies OK with zero hits is recorded as `empty` (failover keeps walking, because a later link may have hits) and, if no provider produces hits, the call **succeeds** with `results: []`. "Nothing matched" is no longer reported as `all providers failed`.
+
+**Success schema (search):** `{"success": true, "provider": ..., "mode": ..., "latency_ms": ..., "attempts": [...], "results": [...]}`. **Provider error schema:** `{"success": false, "error": "...", "attempts": [...]}`. **Invalid-input schema:** `{"success": false, "error": "invalid input: ..."}` (no `attempts`). Fetch returns one object per URL with `url`, `content`, `content_type`, `title`, `truncated`, `original_length`, `provider`, `mode`, `latency_ms`, and `attempts`; failed URLs carry `error` and `attempts` instead of success metadata.
 
 Sample failure of a mixed chain (`UWR_SEARCH_CHAIN=yuanbao,bocha,ddgs` with no Yuanbao/Bocha keys):
 
@@ -245,6 +251,8 @@ Accepts a single `url` string or a `urls` array (max 5) and an optional `provide
   "content": "# Example Domain\n\n...",
   "content_type": "text_markdown",
   "title": "Example Domain",
+  "truncated": false,
+  "original_length": 1256,
   "provider": "anysearch",
   "mode": "keyless",
   "latency_ms": 191,
@@ -254,9 +262,13 @@ Accepts a single `url` string or a `urls` array (max 5) and an optional `provide
 
 Failed URLs carry an `error` field instead of `content`. Content is Markdown/clean text — never raw HTML. JS-rendered, login-walled, or CAPTCHA-protected pages are not guaranteed (plain HTTP retrieval only; no browser automation).
 
+**Truncation is explicit (0.3.1).** `content` is cut at `WEB_RETRIEVAL_EXTRACT_CHAR_LIMIT` characters; `truncated: true` says it happened and `original_length` is the pre-cut character count (characters, not bytes). No marker text is appended — the fields are the marker, so `content` stays a clean prefix.
+
+**Blocked pages are errors, not content (0.3.1).** A CDN/CAPTCHA interstitial (Cloudflare "Just a moment…", "Checking your browser", Akamai "Access Denied" with a `Reference #`) raises a fallback-eligible error so the chain tries the next provider. Detection is evidence-based: inside a body shorter than `UWR_BLOCK_DETECTION_MAX_CHARS` it needs a challenge *title* plus a body marker, or three distinct body markers. Length alone is never a signal, so short pages ("Not found") and long articles that merely discuss captchas pass through. `UWR_BLOCK_DETECTION=off` disables it.
+
 ### `list_providers()`
 
-Returns every provider this build knows, with capability, configuration status, enabled flag and its 1-based position in each active chain, plus the active `search_mode` and the fan-out settings (`fanout.n`, `fanout.grace_s`). Key values are never returned.
+Returns every provider this build knows, with capability, configuration status, enabled flag and its 1-based position in each active chain, plus the active `search_mode`, the fan-out settings (`fanout.n`, `fanout.grace_s`) and the fetch policy (`fetch_policy.allow_private_network`, `.block_detection`, `.extract_char_limit`). Key values are never returned.
 
 ```json
 {
@@ -277,9 +289,21 @@ Returns every provider this build knows, with capability, configuration status, 
 
 ### Network scope & SSRF note
 
-`web_fetch` retrieves any URL the **host environment** can reach — this deliberately includes private-network and `localhost` targets, which is a legitimate capability for a local agent tool. Redirects may land on private or link-local destinations. When deploying against **untrusted agent input**, apply network-level isolation (container/netns/firewall) as appropriate for your threat model. A future `WEB_RETRIEVAL_BLOCK_PRIVATE=1` opt-in may add in-process filtering; it is intentionally not implemented yet.
+**Private-network access is opt-in (0.3.1).** `web_fetch` refuses private, loopback, link-local, CGNAT and otherwise non-public targets before any provider is called, and the refusal is per URL (`error: invalid input: refusing to fetch …`), so a batch keeps working. Set `UWR_ALLOW_PRIVATE_NETWORK=1` to restore the pre-0.3.1 behaviour (fetching intranet pages, `localhost` dev servers, …).
 
-Batch behavior: `urls` is capped at **5 per call** (larger batches are rejected with an explicit error, not silently truncated), duplicates are de-duplicated preserving first-seen order, and the **whole batch shares one deadline** — URLs whose turn arrives after the deadline return a timeout error without any network attempt. Error text containing URLs has credential-looking query parameters (`token=`, `api_key=`, ...) redacted.
+How far the check reaches, and where it stops:
+
+- **IP literals** (including bracketed IPv6, IPv4-mapped IPv6 and the decimal `2130706433` form) are decided exactly, with no DNS.
+- **Hostnames** are resolved with `socket.getaddrinfo` — the platform resolver — so `/etc/hosts`, systemd-resolved and host-level controls still apply. No private DNS client is added: bypassing the dependent host's resolution policy would defeat its existing security constraints. **Every** returned address must be globally routable, so a public+private answer (what a rebinding attempt looks like from here) is rejected.
+- **Redirects** are followed by the provider's own network, not by this process. A final URL a provider reports is re-checked and fails the call closed when it is non-public, but the hop has already happened — there is no connection binding to inspect, so this cannot *prevent* that hop. Preventing it outright needs a local fetching proxy, which this server does not have.
+- **DNS rebinding** between our check and the provider's connect cannot be excluded for the same reason. Only a design that resolves, connects and then verifies the peer address can claim that; a third-party extraction API does not expose it.
+- **A hostname that does not resolve here is allowed** (logged at DEBUG). The provider resolves it on its own network, so our resolver's failure proves nothing — residual gap: an internal-only name that only resolves inside your network is not detectable from this host.
+
+For untrusted agent input in a hardened deployment, keep network-level isolation (container/netns/firewall) as the outer boundary; this check is defence in depth, not a sandbox.
+
+Batch behavior: `urls` is capped at **5 per call** (larger batches are rejected with an explicit error, not silently truncated), duplicates are de-duplicated preserving first-seen order, and the **whole batch shares one deadline** — URLs whose turn arrives after the deadline return a timeout error without any network attempt.
+
+**Credential handling (0.3.1, changed).** Diagnostic text — `error` strings, `attempts` outcomes, the `AUTH FAILURE` log lines — is scrubbed of configured key values, `NAME=value` key assignments, bearer tokens and credential-bearing query parameters (`?token=`, `?sig=`, `?api_key=`, …). **Successful payloads are no longer pattern-rewritten**: a fetched page may legitimately contain signed URLs (`?sig=…`) and rewriting them produced links that no longer work. The only pass over a success payload removes the exact values of credentials configured in this process (a page echoing your key is a leak by definition). Trust boundary: the payload goes to the calling agent only and is never written to a log; third-party signed URLs inside page content belong to that page's publisher and are returned as-is.
 
 ## Routing & fallback
 
@@ -309,7 +333,7 @@ Every one of those links is either free or priced per call (see the table below)
 | Mode | Behaviour | Cost per search |
 |---|---|---|
 | `failover` (default) | Walks the chain in order; the first provider that returns OK wins, even with no hits | one provider call |
-| `fanout` | Queries the first N eligible providers **concurrently**, waits `UWR_FANOUT_GRACE` seconds for stragglers once the first non-empty answer arrives, then merges and rank-fuses everything that arrived | N provider calls |
+| `fanout` | Queries the first N eligible providers **concurrently**, waits `UWR_FANOUT_GRACE` seconds for stragglers once the first answer (hit or empty) arrives, then merges and rank-fuses everything that arrived | N provider calls |
 
 The trade-off: fan-out spends **N× provider quota per search**, and its latency is
 bounded by the grace window (at most `UWR_FANOUT_GRACE` seconds more than the
@@ -367,9 +391,10 @@ Merging (`fanout.py`):
 
 Fan-out responses set `provider: "fanout"` and `mode` to the shared auth mode of
 the answering providers, or `"mixed"` when they differ. `attempts` carries one
-entry per queried provider: `ok` (plus `results` and `latency_ms`),
-`error:<msg>`, `skipped:not_configured`, `skipped:fanout` (beyond the N-provider
-cutoff), `skipped:grace` (a late successful answer is discarded; a late error stays visible) or `skipped:deadline`. Success
+entry per queried provider: `ok` (plus `results`, `latency_ms` and the `mode` that
+answered), `error:<msg>`, `skipped:not_configured`, `skipped:fanout` (beyond the
+N-provider cutoff), `skipped:grace` (a late successful answer is discarded; a late
+error stays visible) or `skipped:deadline`. Success
 requires at least one provider to answer OK, not at least one hit: if every
 answering provider returns an empty list, the response is a success with
 `results: []` and `ok` / `results: 0` entries in `attempts` — the same thing

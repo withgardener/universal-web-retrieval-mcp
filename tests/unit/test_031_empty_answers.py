@@ -27,7 +27,6 @@ import json
 
 import pytest
 
-from universal_web_retrieval import config
 from universal_web_retrieval.errors import (AuthMode, Capability, Provider,
                                             ProviderError, SearchResult)
 from universal_web_retrieval.providers.router import ProviderRouter
